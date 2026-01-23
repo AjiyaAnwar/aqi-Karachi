@@ -1,0 +1,16 @@
+AQI Statistical Summary:
+==================================================
+Mean: 112.35
+Median: 112.00
+Std Dev: 25.15
+Skewness: 0.09
+Kurtosis: -1.22
+Minimum: 67.00
+Maximum: 154.00
+25th Percentile: 90.00
+75th Percentile: 134.00
+
+AQI Categories:
+Moderate: 38.33% (414 records)
+Unhealthy for Sensitive: 53.33% (576 records)
+Unhealthy: 8.33% (90 records)
