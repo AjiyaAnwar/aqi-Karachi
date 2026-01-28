@@ -1,7 +1,5 @@
-"""
-CI/CD Pipeline for AQI Karachi
-Fixed to handle task dependencies properly
-"""
+# cicd/pipeline.py (Updated)
+"""CI/CD Pipeline for AQI Karachi - Enhanced with MongoDB support"""
 import schedule
 import time
 import subprocess
@@ -28,135 +26,82 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 class PipelineExecutor:
-    def __init__(self):
+    def __init__(self, use_mongodb=False):
         self.project_root = PROJECT_ROOT
         self.data_available = False
+        self.use_mongodb = use_mongodb
         
+        if use_mongodb:
+            try:
+                from .mongodb_utils import MongoDBManager
+                mongodb_uri = os.getenv("MONGODB_URI")
+                if mongodb_uri:
+                    self.mongo_manager = MongoDBManager(mongodb_uri)
+                    logger.info("✅ MongoDB integration enabled")
+                else:
+                    logger.warning("⚠️ MONGODB_URI not set, MongoDB integration disabled")
+                    self.use_mongodb = False
+            except ImportError:
+                logger.warning("⚠️ MongoDB utils not available, running in local mode")
+                self.use_mongodb = False
+    
     def run_script(self, script_path, description=""):
         """Run a Python script with proper error handling"""
-        abs_path = os.path.join(self.project_root, script_path)
-        
-        if not os.path.exists(abs_path):
-            logger.error(f"❌ Script not found: {abs_path}")
-            return False
-        
-        logger.info(f"▶️  Running: {description or os.path.basename(script_path)}")
-        try:
-            result = subprocess.run(
-                [sys.executable, abs_path],
-                capture_output=True,
-                text=True,
-                cwd=self.project_root
-            )
-            
-            if result.returncode == 0:
-                logger.info(f"✅ {description} completed successfully")
-                if result.stdout.strip():
-                    for line in result.stdout.strip().split('\n'):
-                        if line.strip():
-                            logger.info(f"   {line.strip()}")
-                return True
-            else:
-                logger.error(f"❌ {description} failed with code {result.returncode}")
-                if result.stderr:
-                    for line in result.stderr.strip().split('\n')[-10:]:  # Last 10 lines
-                        if line.strip():
-                            logger.error(f"   {line.strip()}")
-                return False
-        except Exception as e:
-            logger.error(f"❌ Exception in {description}: {str(e)}")
-            return False
+        # ... (keep your existing run_script method) ...
     
-    def check_data_exists(self):
-        """Check if data exists before running EDA"""
-        data_dirs = [
-            os.path.join(self.project_root, 'data'),
-            os.path.join(self.project_root, 'results'),
-            os.path.join(self.project_root, 'data_pipeline')
-        ]
-        
-        for data_dir in data_dirs:
-            if os.path.exists(data_dir):
-                for root, dirs, files in os.walk(data_dir):
-                    if files:
-                        # Check for data files (CSV, JSON, etc.)
-                        data_files = [f for f in files if f.endswith(('.csv', '.json', '.pkl', '.parquet'))]
-                        if data_files:
-                            logger.info(f"📁 Found data files in {root}: {len(data_files)} files")
-                            return True
-        
-        logger.warning("⚠️  No data files found")
-        return False
+    def log_to_mongo(self, step, status, details=None):
+        """Log execution to MongoDB if enabled"""
+        if self.use_mongodb:
+            log_id = self.mongo_manager.log_pipeline_step(
+                step=step,
+                status=status,
+                details=details
+            )
+            return log_id
+        return None
     
     def run_data_collection(self):
         """Run data collection scripts"""
         logger.info("📥 COLLECTING DATA...")
         
-        # Try historical data collection first
-        success = self.run_script(
-            "data_pipeline/collect_historical.py",
-            "Historical data collection"
-        )
+        # Log start
+        log_id = self.log_to_mongo('data_collection', 'started')
         
-        if success:
-            self.data_available = self.check_data_exists()
-            if self.data_available:
-                logger.info("✅ Data collection successful, data is available")
-            else:
-                logger.warning("⚠️  Data collection ran but no data files were created")
-        
-        return success
-    
-    def run_feature_engineering(self):
-        """Run feature engineering"""
-        # Only run if data exists
-        if not self.data_available and not self.check_data_exists():
-            logger.warning("⚠️  Skipping feature engineering - no data available")
-            return False
-        
-        logger.info("🔧 ENGINEERING FEATURES...")
-        return self.run_script(
-            "data_pipeline/features.py",
-            "Feature engineering"
-        )
-    
-    def run_eda(self):
-        """Run exploratory data analysis"""
-        # Only run if data exists
-        if not self.data_available and not self.check_data_exists():
-            logger.warning("⚠️  Skipping EDA - no data available")
-            logger.info("💡 Running data collection first...")
+        try:
+            # Try historical data collection first
+            success = self.run_script(
+                "data_pipeline/collect_historical.py",
+                "Historical data collection"
+            )
             
-            # Try to collect data
-            if self.run_data_collection():
-                self.data_available = True
+            if success:
+                self.data_available = self.check_data_exists()
+                
+                # Log success
+                self.log_to_mongo('data_collection', 'completed', {
+                    'data_available': self.data_available
+                })
+                
+                if self.data_available:
+                    logger.info("✅ Data collection successful, data is available")
+                else:
+                    logger.warning("⚠️ Data collection ran but no data files were created")
             else:
-                logger.error("❌ Cannot run EDA - data collection failed")
-                return False
-        
-        logger.info("📊 RUNNING EXPLORATORY DATA ANALYSIS...")
-        
-        # First try the new intelligent EDA
-        eda_paths = [
-            "notebook/eda_intelligent.py",  # You should save the new script as this
-            "notebook/eda.py"  # Fallback to original
-        ]
-        
-        for eda_path in eda_paths:
-            if os.path.exists(os.path.join(self.project_root, eda_path)):
-                return self.run_script(
-                    eda_path,
-                    "Exploratory Data Analysis"
-                )
-        
-        logger.error("❌ No EDA script found")
-        return False
+                # Log failure
+                self.log_to_mongo('data_collection', 'failed')
+            
+            return success
+            
+        except Exception as e:
+            logger.error(f"❌ Data collection failed: {str(e)}")
+            self.log_to_mongo('data_collection', 'error', {'error': str(e)})
+            return False
     
     def run_model_training(self):
-        """Run model training"""
+        """Run model training with MongoDB integration"""
         # Check if we have processed data
         if not self.check_data_exists():
-            logger.warning("⚠️  Skipping model training - no data available")
+            logger.warning("⚠️ Skipping model training - no data available")
             logger.info("💡 Running data pipeline first...")
             
             # Run data collection and feature engineering
@@ -165,115 +110,102 @@ class PipelineExecutor:
         
         logger.info("🤖 TRAINING MODELS...")
         
-        # Try multiple training scripts
-        training_scripts = [
-            "model_training/runallmodels.py",
-            "model_training/train_models.py",
-            "model_training/train_time_series_models.py"
-        ]
+        # Log start
+        log_id = self.log_to_mongo('model_training', 'started')
         
-        success = True
-        for script in training_scripts:
-            if os.path.exists(os.path.join(self.project_root, script)):
-                if not self.run_script(script, f"Model training: {os.path.basename(script)}"):
-                    success = False
-        
-        return success
+        try:
+            # Try multiple training scripts
+            training_scripts = [
+                "model_training/runallmodels.py",
+                "model_training/train_models.py",
+                "model_training/train_time_series_models.py"
+            ]
+            
+            success = True
+            for script in training_scripts:
+                if os.path.exists(os.path.join(self.project_root, script)):
+                    if not self.run_script(script, f"Model training: {os.path.basename(script)}"):
+                        success = False
+            
+            # If MongoDB is enabled, store models
+            if success and self.use_mongodb:
+                self._store_trained_models()
+            
+            # Log completion
+            self.log_to_mongo('model_training', 'completed', {
+                'success': success,
+                'parent_log_id': log_id
+            })
+            
+            return success
+            
+        except Exception as e:
+            logger.error(f"❌ Model training failed: {str(e)}")
+            self.log_to_mongo('model_training', 'error', {
+                'error': str(e),
+                'parent_log_id': log_id
+            })
+            return False
     
-    def run_full_pipeline(self):
-        """Run complete end-to-end pipeline"""
-        logger.info("=" * 60)
-        logger.info("🚀 STARTING FULL PIPELINE EXECUTION")
-        logger.info("=" * 60)
-        
-        # Reset data flag
-        self.data_available = False
-        
-        # Execute in order
-        steps = [
-            ("Data Collection", self.run_data_collection),
-            ("Feature Engineering", self.run_feature_engineering),
-            ("Exploratory Data Analysis", self.run_eda),
-            ("Model Training", self.run_model_training)
-        ]
-        
-        results = {}
-        for step_name, step_func in steps:
-            logger.info(f"\n{'='*40}")
-            logger.info(f"STEP: {step_name}")
-            logger.info(f"{'='*40}")
-            results[step_name] = step_func()
-            time.sleep(2)  # Brief pause between steps
-        
-        # Summary
-        logger.info("\n" + "=" * 60)
-        logger.info("📊 PIPELINE EXECUTION SUMMARY")
-        logger.info("=" * 60)
-        
-        all_success = True
-        for step_name, success in results.items():
-            status = "✅ SUCCESS" if success else "❌ FAILED"
-            logger.info(f"{step_name}: {status}")
-            if not success:
-                all_success = False
-        
-        if all_success:
-            logger.info("\n🎉 ALL PIPELINE STEPS COMPLETED SUCCESSFULLY!")
-        else:
-            logger.warning("\n⚠️  Some pipeline steps failed. Check logs for details.")
-        
-        logger.info("=" * 60)
-        return all_success
+    def _store_trained_models(self):
+        """Store trained models in MongoDB"""
+        try:
+            # Import your training script
+            sys.path.append(os.path.join(self.project_root, 'model_training'))
+            from runallmodels import train_and_evaluate_models
+            
+            # Train and get models
+            models = train_and_evaluate_models()
+            
+            # Store each model in MongoDB
+            for model_name, model_data in models.items():
+                model, metrics = model_data
+                self.mongo_manager.store_model(
+                    model=model,
+                    metrics=metrics,
+                    model_name=model_name,
+                    feature_version='local_' + datetime.now().strftime('%Y%m%d_%H%M')
+                )
+            
+            logger.info(f"💾 Stored {len(models)} models in MongoDB")
+            
+        except Exception as e:
+            logger.error(f"❌ Failed to store models in MongoDB: {str(e)}")
+    
+    # ... (keep other methods like check_data_exists, run_feature_engineering, etc.) ...
 
 def main():
-    """Main pipeline orchestrator"""
+    """Main pipeline orchestrator - enhanced for dual mode"""
+    import argparse
+    
+    parser = argparse.ArgumentParser(description='AQI Karachi CI/CD Pipeline')
+    parser.add_argument('--use-mongodb', action='store_true', 
+                       help='Enable MongoDB integration')
+    parser.add_argument('--step', type=str, choices=['data', 'features', 'eda', 'train', 'full'],
+                       help='Run specific step only')
+    args = parser.parse_args()
+    
     logger.info("=" * 60)
-    logger.info("🚀 AQI KARACHI - CI/CD PIPELINE")
-    logger.info("=" * 60)
-    
-    executor = PipelineExecutor()
-    
-    # Schedule tasks with proper dependencies
-    # Daily at midnight: Full data collection
-    schedule.every().day.at("00:00").do(executor.run_data_collection)
-    
-    # Daily at 1 AM: Feature engineering (depends on data)
-    schedule.every().day.at("01:00").do(executor.run_feature_engineering)
-    
-    # Daily at 2 AM: EDA (depends on features)
-    schedule.every().day.at("02:00").do(executor.run_eda)
-    
-    # Model training every 3 hours (will check for data)
-    schedule.every(3).hours.do(executor.run_model_training)
-    
-    # Full pipeline every Sunday at 3 AM
-    schedule.every().sunday.at("03:00").do(executor.run_full_pipeline)
-    
-    logger.info("\n📅 SCHEDULED TASKS:")
-    logger.info("   00:00 - Data Collection")
-    logger.info("   01:00 - Feature Engineering")
-    logger.info("   02:00 - Exploratory Data Analysis")
-    logger.info("   Every 3 hours - Model Training")
-    logger.info("   Sunday 03:00 - Full Pipeline Run")
-    
-    logger.info("\n🔄 Running initial full pipeline...")
-    
-    # Run initial full pipeline
-    executor.run_full_pipeline()
-    
-    logger.info("\n⏰ Pipeline scheduler running. Press Ctrl+C to stop.")
+    logger.info("🚀 AQI KARACHI - ENHANCED CI/CD PIPELINE")
+    logger.info(f"📊 MongoDB: {'ENABLED' if args.use_mongodb else 'DISABLED'}")
     logger.info("=" * 60)
     
-    # Keep scheduler running
-    try:
-        while True:
-            schedule.run_pending()
-            time.sleep(60)
-    except KeyboardInterrupt:
-        logger.info("\n👋 Pipeline stopped by user.")
-    except Exception as e:
-        logger.error(f"❌ Pipeline crashed: {str(e)}")
-        sys.exit(1)
+    executor = PipelineExecutor(use_mongodb=args.use_mongodb)
+    
+    # If specific step requested
+    if args.step:
+        steps = {
+            'data': executor.run_data_collection,
+            'features': executor.run_feature_engineering,
+            'eda': executor.run_eda,
+            'train': executor.run_model_training,
+            'full': executor.run_full_pipeline
+        }
+        steps[args.step]()
+        return
+    
+    # Otherwise run scheduled tasks
+    # ... (keep your existing schedule setup) ...
 
 if __name__ == "__main__":
     main()
