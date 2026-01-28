@@ -1,0 +1,4 @@
+date,predicted_aqi,confidence,category
+2026-01-23,75.52216753132672,0.9,Moderate
+2026-01-24,70.59203503590452,0.8,Moderate
+2026-01-25,75.47902171527919,0.7,Moderate
