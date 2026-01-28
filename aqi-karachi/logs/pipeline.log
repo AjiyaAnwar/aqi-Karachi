@@ -1,0 +1,123 @@
+2026-01-23 09:29:28,914 - INFO - ============================================================
+2026-01-23 09:29:28,914 - INFO - 🚀 AQI Karachi CI/CD Pipeline Started
+2026-01-23 09:29:28,914 - INFO - ============================================================
+2026-01-23 09:29:28,915 - INFO - 📅 Scheduled Tasks:
+2026-01-23 09:29:28,915 - INFO -    - Historical data collection: Daily at 00:00
+2026-01-23 09:29:28,915 - INFO -    - Feature engineering: Daily at 01:00
+2026-01-23 09:29:28,915 - INFO -    - EDA: Daily at 02:00
+2026-01-23 09:29:28,915 - INFO -    - Model training: Every 3 hours
+2026-01-23 09:29:28,915 - INFO -    - Time series training: Every 6 hours
+2026-01-23 09:29:28,915 - INFO -    - Dashboard updates: Every 4 hours
+2026-01-23 09:29:28,915 - INFO -    - Tests: Every 12 hours
+2026-01-23 09:29:28,915 - INFO -    - Full pipeline: Weekly on Sunday at 03:00
+2026-01-23 09:29:28,916 - INFO - 
+🔄 Running initial full pipeline...
+2026-01-23 09:29:28,916 - INFO - 🚀 Starting full pipeline run...
+2026-01-23 09:29:28,916 - INFO - 📥 Collecting historical data...
+2026-01-23 09:29:28,930 - ERROR - ❌ Historical data collection failed: /home/codespace/.python/current/bin/python: can't open file '/workspaces/aqi-Karachi/aqi-karachi/cicd/data_pipeline/collect_historical.py': [Errno 2] No such file or directory
+
+2026-01-23 09:29:28,930 - INFO - 🔧 Creating features...
+2026-01-23 09:29:28,944 - ERROR - ❌ Feature engineering failed: /home/codespace/.python/current/bin/python: can't open file '/workspaces/aqi-Karachi/aqi-karachi/cicd/data_pipeline/features.py': [Errno 2] No such file or directory
+
+2026-01-23 09:29:28,944 - INFO - 📊 Running exploratory data analysis...
+2026-01-23 09:29:28,958 - ERROR - ❌ EDA failed: /home/codespace/.python/current/bin/python: can't open file '/workspaces/aqi-Karachi/aqi-karachi/cicd/notebook/eda.py': [Errno 2] No such file or directory
+
+2026-01-23 09:29:28,959 - INFO - 🤖 Training models...
+2026-01-23 09:29:28,973 - ERROR - ❌ Model training failed: /home/codespace/.python/current/bin/python: can't open file '/workspaces/aqi-Karachi/aqi-karachi/cicd/model_training/runallmodels.py': [Errno 2] No such file or directory
+
+2026-01-23 09:29:28,974 - INFO - 📈 Training time series models...
+2026-01-23 09:29:28,987 - ERROR - ❌ Time series training failed: /home/codespace/.python/current/bin/python: can't open file '/workspaces/aqi-Karachi/aqi-karachi/cicd/model_training/train_time_series_models.py': [Errno 2] No such file or directory
+
+2026-01-23 09:29:28,987 - INFO - 🧪 Running tests...
+2026-01-23 09:29:29,002 - ERROR - ❌ Tests failed: /home/codespace/.python/current/bin/python: can't open file '/workspaces/aqi-Karachi/aqi-karachi/cicd/testdata.py': [Errno 2] No such file or directory
+
+2026-01-23 09:29:29,002 - INFO - 📱 Updating dashboard...
+2026-01-23 09:29:29,017 - ERROR - ❌ Dashboard update failed: /home/codespace/.python/current/bin/python: can't open file '/workspaces/aqi-Karachi/aqi-karachi/cicd/dashboard/dashboard.py': [Errno 2] No such file or directory
+
+2026-01-23 09:29:29,017 - INFO - ✅ Full pipeline run completed!
+2026-01-23 09:29:29,017 - INFO - 
+⏰ Pipeline scheduler running. Press Ctrl+C to stop.
+2026-01-23 09:31:54,885 - INFO - 
+👋 Pipeline stopped by user.
+2026-01-23 09:33:20,641 - INFO - ============================================================
+2026-01-23 09:33:20,641 - INFO - 🚀 AQI Karachi CI/CD Pipeline Started
+2026-01-23 09:33:20,641 - INFO - 📁 Project Root: /workspaces/aqi-Karachi/aqi-karachi
+2026-01-23 09:33:20,642 - INFO - ============================================================
+2026-01-23 09:33:20,642 - INFO - 🔍 Checking project structure...
+2026-01-23 09:33:20,642 - INFO -   ✓ data_pipeline/
+2026-01-23 09:33:20,642 - INFO -   ✓ model_training/
+2026-01-23 09:33:20,642 - INFO -   ✓ logs/
+2026-01-23 09:33:20,642 - INFO -   ✓ data/
+2026-01-23 09:33:20,642 - INFO -   ✓ models/
+2026-01-23 09:33:20,642 - INFO -   ✓ results/
+2026-01-23 09:33:20,642 - INFO -   ✓ data_pipeline/collect_historical.py
+2026-01-23 09:33:20,642 - INFO -   ✓ data_pipeline/features.py
+2026-01-23 09:33:20,643 - INFO -   ✓ model_training/train_models.py
+2026-01-23 09:33:20,643 - INFO - 
+📅 Scheduled Tasks:
+2026-01-23 09:33:20,643 - INFO -    - Historical data collection: Daily at 00:00
+2026-01-23 09:33:20,643 - INFO -    - Feature engineering: Daily at 01:00
+2026-01-23 09:33:20,643 - INFO -    - EDA: Daily at 02:00
+2026-01-23 09:33:20,643 - INFO -    - Model training: Every 3 hours
+2026-01-23 09:33:20,643 - INFO -    - Dashboard updates: Every 4 hours
+2026-01-23 09:33:20,643 - INFO -    - Tests: Every 12 hours
+2026-01-23 09:33:20,644 - INFO -    - Full pipeline: Weekly on Sunday at 03:00
+2026-01-23 09:33:20,644 - INFO - 
+🔄 Do you want to run the initial full pipeline now? (y/n): 
+2026-01-23 09:33:20,644 - INFO - Running initial pipeline...
+2026-01-23 09:33:20,644 - INFO - ============================================================
+2026-01-23 09:33:20,644 - INFO - 🚀 Starting full pipeline run...
+2026-01-23 09:33:20,644 - INFO - ============================================================
+2026-01-23 09:33:20,644 - INFO - 🔍 Checking project structure...
+2026-01-23 09:33:20,644 - INFO -   ✓ data_pipeline/
+2026-01-23 09:33:20,644 - INFO -   ✓ model_training/
+2026-01-23 09:33:20,644 - INFO -   ✓ logs/
+2026-01-23 09:33:20,644 - INFO -   ✓ data/
+2026-01-23 09:33:20,644 - INFO -   ✓ models/
+2026-01-23 09:33:20,645 - INFO -   ✓ results/
+2026-01-23 09:33:20,645 - INFO -   ✓ data_pipeline/collect_historical.py
+2026-01-23 09:33:20,645 - INFO -   ✓ data_pipeline/features.py
+2026-01-23 09:33:20,645 - INFO -   ✓ model_training/train_models.py
+2026-01-23 09:33:20,645 - INFO - 📂 Running: Historical data collection
+2026-01-23 09:44:46,236 - INFO - ============================================================
+2026-01-23 09:44:46,236 - INFO - 🚀 AQI KARACHI - CI/CD PIPELINE
+2026-01-23 09:44:46,236 - INFO - ============================================================
+2026-01-23 09:44:46,237 - INFO - 
+📅 SCHEDULED TASKS:
+2026-01-23 09:44:46,237 - INFO -    00:00 - Data Collection
+2026-01-23 09:44:46,237 - INFO -    01:00 - Feature Engineering
+2026-01-23 09:44:46,237 - INFO -    02:00 - Exploratory Data Analysis
+2026-01-23 09:44:46,237 - INFO -    Every 3 hours - Model Training
+2026-01-23 09:44:46,237 - INFO -    Sunday 03:00 - Full Pipeline Run
+2026-01-23 09:44:46,237 - INFO - 
+🔄 Running initial full pipeline...
+2026-01-23 09:44:46,237 - INFO - ============================================================
+2026-01-23 09:44:46,237 - INFO - 🚀 STARTING FULL PIPELINE EXECUTION
+2026-01-23 09:44:46,237 - INFO - ============================================================
+2026-01-23 09:44:46,237 - INFO - 
+========================================
+2026-01-23 09:44:46,238 - INFO - STEP: Data Collection
+2026-01-23 09:44:46,238 - INFO - ========================================
+2026-01-23 09:44:46,238 - INFO - 📥 COLLECTING DATA...
+2026-01-23 09:44:46,238 - INFO - ▶️  Running: Historical data collection
+2026-01-28 11:01:30,986 - INFO - ============================================================
+2026-01-28 11:01:30,987 - INFO - 🚀 AQI KARACHI - CI/CD PIPELINE
+2026-01-28 11:01:30,987 - INFO - ============================================================
+2026-01-28 11:01:30,987 - INFO - 
+📅 SCHEDULED TASKS:
+2026-01-28 11:01:30,987 - INFO -    00:00 - Data Collection
+2026-01-28 11:01:30,987 - INFO -    01:00 - Feature Engineering
+2026-01-28 11:01:30,987 - INFO -    02:00 - Exploratory Data Analysis
+2026-01-28 11:01:30,987 - INFO -    Every 3 hours - Model Training
+2026-01-28 11:01:30,988 - INFO -    Sunday 03:00 - Full Pipeline Run
+2026-01-28 11:01:30,988 - INFO - 
+🔄 Running initial full pipeline...
+2026-01-28 11:01:30,988 - INFO - ============================================================
+2026-01-28 11:01:30,988 - INFO - 🚀 STARTING FULL PIPELINE EXECUTION
+2026-01-28 11:01:30,988 - INFO - ============================================================
+2026-01-28 11:01:30,988 - INFO - 
+========================================
+2026-01-28 11:01:30,989 - INFO - STEP: Data Collection
+2026-01-28 11:01:30,989 - INFO - ========================================
+2026-01-28 11:01:30,989 - INFO - 📥 COLLECTING DATA...
+2026-01-28 11:01:30,989 - INFO - ▶️  Running: Historical data collection

@@ -1,0 +1,436 @@
+"""
+📊 EDA Analysis Script for AQI Karachi Data
+Comprehensive exploratory data analysis
+"""
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+from datetime import datetime, timedelta
+import os
+import sys
+from dotenv import load_dotenv
+import warnings
+warnings.filterwarnings('ignore')
+
+# Add src to path
+current_dir = os.path.dirname(os.path.abspath(__file__))
+src_dir = os.path.join(current_dir, 'src')
+sys.path.insert(0, src_dir)
+
+load_dotenv()
+
+# Set plotting style
+plt.style.use('seaborn-v0_8-darkgrid')
+sns.set_palette("husl")
+
+def load_historical_data(days=45):
+    """Load historical data for EDA"""
+    try:
+        from pymongo import MongoClient
+        
+        uri = os.getenv("MONGODB_URI")
+        db_name = os.getenv("MONGODB_DATABASE", "aqi_predictor")
+        
+        client = MongoClient(uri)
+        db = client[db_name]
+        
+        cutoff_date = datetime.now() - timedelta(days=days)
+        
+        historical_data = list(db.aqi_features.find({
+            'timestamp': {'$gte': cutoff_date}
+        }).sort('timestamp', 1))
+        
+        if historical_data:
+            df = pd.DataFrame(historical_data)
+            if '_id' in df.columns:
+                df = df.drop('_id', axis=1)
+            
+            if 'timestamp' in df.columns:
+                df['timestamp'] = pd.to_datetime(df['timestamp'])
+                df = df.sort_values('timestamp')
+            
+            # Add derived features for EDA
+            df['hour'] = df['timestamp'].dt.hour
+            df['day_of_week'] = df['timestamp'].dt.dayofweek
+            df['date'] = df['timestamp'].dt.date
+            df['month'] = df['timestamp'].dt.month
+            df['day_name'] = df['timestamp'].dt.day_name()
+            df['week_number'] = df['timestamp'].dt.isocalendar().week
+            
+            print(f"✅ Loaded {len(df)} records")
+            print(f"📅 Time range: {df['timestamp'].min()} to {df['timestamp'].max()}")
+            
+            return df
+        
+        return pd.DataFrame()
+        
+    except Exception as e:
+        print(f"❌ Error loading data: {e}")
+        return pd.DataFrame()
+
+def data_overview(df):
+    """Generate data overview report"""
+    print("=" * 70)
+    print("📊 DATA OVERVIEW")
+    print("=" * 70)
+    
+    # Basic info
+    print(f"Total Records: {len(df)}")
+    print(f"Time Period: {(df['timestamp'].max() - df['timestamp'].min()).days} days")
+    print(f"Data Columns: {len(df.columns)}")
+    
+    # Column info
+    print("\n📋 COLUMNS:")
+    for col in df.columns:
+        print(f"  - {col}: {df[col].dtype}")
+    
+    # Missing values
+    print("\n🔍 MISSING VALUES:")
+    missing = df.isnull().sum()
+    missing_pct = (missing / len(df)) * 100
+    missing_df = pd.DataFrame({
+        'Missing Values': missing,
+        'Percentage': missing_pct
+    })
+    print(missing_df[missing_df['Missing Values'] > 0])
+    
+    # Basic statistics
+    print("\n📈 BASIC STATISTICS:")
+    numeric_cols = df.select_dtypes(include=[np.number]).columns
+    print(df[numeric_cols].describe().T)
+
+def create_distribution_plots(df, save_path='eda_plots'):
+    """Create distribution plots"""
+    os.makedirs(save_path, exist_ok=True)
+    
+    # 1. AQI Distribution
+    fig, axes = plt.subplots(2, 2, figsize=(15, 10))
+    
+    # AQI Histogram
+    axes[0, 0].hist(df['aqi'], bins=30, edgecolor='black', alpha=0.7, color='skyblue')
+    axes[0, 0].set_title('AQI Distribution', fontsize=14, fontweight='bold')
+    axes[0, 0].set_xlabel('AQI')
+    axes[0, 0].set_ylabel('Frequency')
+    axes[0, 0].grid(True, alpha=0.3)
+    
+    # AQI Boxplot
+    axes[0, 1].boxplot(df['aqi'])
+    axes[0, 1].set_title('AQI Box Plot', fontsize=14, fontweight='bold')
+    axes[0, 1].set_ylabel('AQI')
+    axes[0, 1].grid(True, alpha=0.3)
+    
+    # PM2.5 Distribution
+    if 'pm25' in df.columns:
+        axes[1, 0].hist(df['pm25'], bins=30, edgecolor='black', alpha=0.7, color='lightcoral')
+        axes[1, 0].set_title('PM2.5 Distribution', fontsize=14, fontweight='bold')
+        axes[1, 0].set_xlabel('PM2.5 (µg/m³)')
+        axes[1, 0].set_ylabel('Frequency')
+        axes[1, 0].grid(True, alpha=0.3)
+    
+    # PM10 Distribution
+    if 'pm10' in df.columns:
+        axes[1, 1].hist(df['pm10'], bins=30, edgecolor='black', alpha=0.7, color='lightgreen')
+        axes[1, 1].set_title('PM10 Distribution', fontsize=14, fontweight='bold')
+        axes[1, 1].set_xlabel('PM10 (µg/m³)')
+        axes[1, 1].set_ylabel('Frequency')
+        axes[1, 1].grid(True, alpha=0.3)
+    
+    plt.tight_layout()
+    plt.savefig(f'{save_path}/distributions.png', dpi=300, bbox_inches='tight')
+    plt.show()
+
+def create_time_series_plots(df, save_path='eda_plots'):
+    """Create time series analysis plots"""
+    fig, axes = plt.subplots(2, 2, figsize=(15, 10))
+    
+    # 1. Daily AQI Trend
+    daily_avg = df.groupby('date')['aqi'].agg(['mean', 'std']).reset_index()
+    axes[0, 0].plot(daily_avg['date'], daily_avg['mean'], linewidth=2, color='blue')
+    axes[0, 0].fill_between(daily_avg['date'], 
+                           daily_avg['mean'] - daily_avg['std'], 
+                           daily_avg['mean'] + daily_avg['std'], 
+                           alpha=0.2, color='blue')
+    axes[0, 0].set_title('Daily AQI Trend with Std Dev', fontsize=14, fontweight='bold')
+    axes[0, 0].set_xlabel('Date')
+    axes[0, 0].set_ylabel('AQI')
+    axes[0, 0].grid(True, alpha=0.3)
+    axes[0, 0].tick_params(axis='x', rotation=45)
+    
+    # 2. Hourly Pattern
+    hourly_avg = df.groupby('hour')['aqi'].mean().reset_index()
+    axes[0, 1].bar(hourly_avg['hour'], hourly_avg['aqi'], color='orange', alpha=0.7)
+    axes[0, 1].set_title('Average AQI by Hour of Day', fontsize=14, fontweight='bold')
+    axes[0, 1].set_xlabel('Hour')
+    axes[0, 1].set_ylabel('Average AQI')
+    axes[0, 1].grid(True, alpha=0.3)
+    axes[0, 1].set_xticks(range(0, 24, 2))
+    
+    # 3. Weekly Pattern
+    day_order = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
+    df['day_name'] = pd.Categorical(df['day_name'], categories=day_order, ordered=True)
+    weekly_avg = df.groupby('day_name')['aqi'].mean().reset_index()
+    axes[1, 0].bar(weekly_avg['day_name'], weekly_avg['aqi'], color='green', alpha=0.7)
+    axes[1, 0].set_title('Average AQI by Day of Week', fontsize=14, fontweight='bold')
+    axes[1, 0].set_xlabel('Day of Week')
+    axes[1, 0].set_ylabel('Average AQI')
+    axes[1, 0].grid(True, alpha=0.3)
+    axes[1, 0].tick_params(axis='x', rotation=45)
+    
+    # 4. Monthly Pattern
+    monthly_avg = df.groupby('month')['aqi'].mean().reset_index()
+    month_names = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 
+                   'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+    axes[1, 1].bar([month_names[m-1] for m in monthly_avg['month']], 
+                   monthly_avg['aqi'], color='purple', alpha=0.7)
+    axes[1, 1].set_title('Average AQI by Month', fontsize=14, fontweight='bold')
+    axes[1, 1].set_xlabel('Month')
+    axes[1, 1].set_ylabel('Average AQI')
+    axes[1, 1].grid(True, alpha=0.3)
+    
+    plt.tight_layout()
+    plt.savefig(f'{save_path}/time_series_analysis.png', dpi=300, bbox_inches='tight')
+    plt.show()
+
+def create_correlation_analysis(df, save_path='eda_plots'):
+    """Create correlation analysis plots"""
+    numeric_cols = df.select_dtypes(include=[np.number]).columns
+    numeric_cols = [col for col in numeric_cols if col not in ['hour', 'day_of_week', 'month', 'week_number']]
+    
+    if len(numeric_cols) > 1:
+        # Correlation matrix
+        corr_matrix = df[numeric_cols].corr()
+        
+        fig, axes = plt.subplots(1, 2, figsize=(15, 6))
+        
+        # Heatmap
+        im = axes[0].imshow(corr_matrix, cmap='coolwarm', vmin=-1, vmax=1)
+        axes[0].set_title('Correlation Heatmap', fontsize=14, fontweight='bold')
+        axes[0].set_xticks(range(len(numeric_cols)))
+        axes[0].set_yticks(range(len(numeric_cols)))
+        axes[0].set_xticklabels(numeric_cols, rotation=45, ha='right')
+        axes[0].set_yticklabels(numeric_cols)
+        
+        # Add correlation values
+        for i in range(len(numeric_cols)):
+            for j in range(len(numeric_cols)):
+                text = axes[0].text(j, i, f'{corr_matrix.iloc[i, j]:.2f}',
+                                   ha="center", va="center", color="black", fontsize=9)
+        
+        plt.colorbar(im, ax=axes[0])
+        
+        # Scatter plots
+        if 'pm25' in df.columns and 'aqi' in df.columns:
+            axes[1].scatter(df['pm25'], df['aqi'], alpha=0.5, color='blue')
+            axes[1].set_title('PM2.5 vs AQI Correlation', fontsize=14, fontweight='bold')
+            axes[1].set_xlabel('PM2.5 (µg/m³)')
+            axes[1].set_ylabel('AQI')
+            axes[1].grid(True, alpha=0.3)
+            
+            # Add trend line
+            z = np.polyfit(df['pm25'], df['aqi'], 1)
+            p = np.poly1d(z)
+            axes[1].plot(df['pm25'], p(df['pm25']), "r--", alpha=0.8)
+        
+        plt.tight_layout()
+        plt.savefig(f'{save_path}/correlation_analysis.png', dpi=300, bbox_inches='tight')
+        plt.show()
+        
+        # Print correlation with AQI
+        print("\n🔗 CORRELATION WITH AQI:")
+        aqi_corr = corr_matrix['aqi'].sort_values(ascending=False)
+        for feature, corr_value in aqi_corr.items():
+            if feature != 'aqi':
+                print(f"  {feature}: {corr_value:.3f}")
+
+def create_outlier_analysis(df, save_path='eda_plots'):
+    """Create outlier analysis"""
+    if 'aqi' in df.columns:
+        # Calculate outliers using IQR
+        Q1 = df['aqi'].quantile(0.25)
+        Q3 = df['aqi'].quantile(0.75)
+        IQR = Q3 - Q1
+        lower_bound = Q1 - 1.5 * IQR
+        upper_bound = Q3 + 1.5 * IQR
+        
+        outliers = df[(df['aqi'] < lower_bound) | (df['aqi'] > upper_bound)]
+        
+        print("\n🔍 OUTLIER ANALYSIS:")
+        print(f"  Q1 (25th percentile): {Q1:.2f}")
+        print(f"  Q3 (75th percentile): {Q3:.2f}")
+        print(f"  IQR: {IQR:.2f}")
+        print(f"  Lower Bound: {lower_bound:.2f}")
+        print(f"  Upper Bound: {upper_bound:.2f}")
+        print(f"  Total Outliers: {len(outliers)}")
+        print(f"  Outlier Percentage: {(len(outliers) / len(df)) * 100:.2f}%")
+        
+        # Create outlier plot
+        fig, axes = plt.subplots(1, 2, figsize=(15, 6))
+        
+        # Box plot
+        axes[0].boxplot(df['aqi'])
+        axes[0].set_title('AQI Box Plot with Outliers', fontsize=14, fontweight='bold')
+        axes[0].set_ylabel('AQI')
+        axes[0].grid(True, alpha=0.3)
+        
+        # Time series with outliers highlighted
+        axes[1].scatter(df['timestamp'], df['aqi'], alpha=0.5, color='blue', label='Normal')
+        if len(outliers) > 0:
+            axes[1].scatter(outliers['timestamp'], outliers['aqi'], 
+                           alpha=0.8, color='red', label='Outliers', s=50)
+        axes[1].set_title('AQI Time Series with Outliers', fontsize=14, fontweight='bold')
+        axes[1].set_xlabel('Timestamp')
+        axes[1].set_ylabel('AQI')
+        axes[1].legend()
+        axes[1].grid(True, alpha=0.3)
+        axes[1].tick_params(axis='x', rotation=45)
+        
+        plt.tight_layout()
+        plt.savefig(f'{save_path}/outlier_analysis.png', dpi=300, bbox_inches='tight')
+        plt.show()
+        
+        if len(outliers) > 0:
+            print("\n📋 TOP OUTLIERS:")
+            print(outliers[['timestamp', 'aqi']].head(10))
+
+def create_seasonal_decomposition(df, save_path='eda_plots'):
+    """Create seasonal decomposition analysis"""
+    if 'aqi' in df.columns:
+        # Resample to daily
+        df.set_index('timestamp', inplace=True)
+        daily_aqi = df['aqi'].resample('D').mean()
+        df.reset_index(inplace=True)
+        
+        # Simple decomposition
+        fig, axes = plt.subplots(3, 1, figsize=(15, 10))
+        
+        # Trend (7-day moving average)
+        daily_aqi_rolling = daily_aqi.rolling(window=7).mean()
+        axes[0].plot(daily_aqi.index, daily_aqi_rolling, linewidth=2, color='blue')
+        axes[0].set_title('Trend Component (7-day Moving Average)', fontsize=14, fontweight='bold')
+        axes[0].set_ylabel('AQI')
+        axes[0].grid(True, alpha=0.3)
+        
+        # Seasonal (residual after removing trend)
+        seasonal = daily_aqi - daily_aqi_rolling
+        axes[1].plot(seasonal.index, seasonal, linewidth=1, color='green', alpha=0.7)
+        axes[1].set_title('Seasonal Component', fontsize=14, fontweight='bold')
+        axes[1].set_ylabel('AQI Deviation')
+        axes[1].grid(True, alpha=0.3)
+        
+        # Residual
+        residual = seasonal - seasonal.rolling(window=3).mean()
+        axes[2].plot(residual.index, residual, linewidth=1, color='red', alpha=0.7)
+        axes[2].set_title('Residual Component', fontsize=14, fontweight='bold')
+        axes[2].set_ylabel('AQI')
+        axes[2].set_xlabel('Date')
+        axes[2].grid(True, alpha=0.3)
+        
+        plt.tight_layout()
+        plt.savefig(f'{save_path}/seasonal_decomposition.png', dpi=300, bbox_inches='tight')
+        plt.show()
+
+def generate_eda_report(df):
+    """Generate comprehensive EDA report"""
+    print("=" * 70)
+    print("📊 COMPREHENSIVE EDA REPORT")
+    print("=" * 70)
+    
+    # Create output directory
+    os.makedirs('eda_reports', exist_ok=True)
+    
+    # 1. Data Overview
+    data_overview(df)
+    
+    # 2. Distribution Analysis
+    create_distribution_plots(df, save_path='eda_reports')
+    
+    # 3. Time Series Analysis
+    create_time_series_plots(df, save_path='eda_reports')
+    
+    # 4. Correlation Analysis
+    create_correlation_analysis(df, save_path='eda_reports')
+    
+    # 5. Outlier Analysis
+    create_outlier_analysis(df, save_path='eda_reports')
+    
+    # 6. Seasonal Decomposition
+    create_seasonal_decomposition(df, save_path='eda_reports')
+    
+    # 7. Summary Statistics
+    print("\n" + "=" * 70)
+    print("📈 SUMMARY STATISTICS")
+    print("=" * 70)
+    
+    summary_stats = {
+        'Average AQI': df['aqi'].mean(),
+        'Median AQI': df['aqi'].median(),
+        'Std Dev AQI': df['aqi'].std(),
+        'Min AQI': df['aqi'].min(),
+        'Max AQI': df['aqi'].max(),
+        '25th Percentile': df['aqi'].quantile(0.25),
+        '75th Percentile': df['aqi'].quantile(0.75),
+        'Skewness': df['aqi'].skew(),
+        'Kurtosis': df['aqi'].kurtosis()
+    }
+    
+    for stat, value in summary_stats.items():
+        print(f"  {stat}: {value:.2f}")
+    
+    # 8. Insights
+    print("\n" + "=" * 70)
+    print("💡 KEY INSIGHTS")
+    print("=" * 70)
+    
+    insights = [
+        f"1. Data covers {(df['timestamp'].max() - df['timestamp'].min()).days} days with {len(df)} hourly records",
+        f"2. Average AQI is {df['aqi'].mean():.1f} ({get_aqi_category(df['aqi'].mean())[0]})",
+        f"3. AQI ranges from {df['aqi'].min():.1f} to {df['aqi'].max():.1f}",
+        f"4. Data shows {'positive' if df['aqi'].skew() > 0 else 'negative'} skewness ({df['aqi'].skew():.2f})",
+        f"5. {'PM2.5' if 'pm25' in df.columns else 'AQI'} has strongest correlation with AQI"
+    ]
+    
+    for insight in insights:
+        print(f"  {insight}")
+    
+    print("\n✅ EDA Report generated in 'eda_reports/' folder")
+
+def get_aqi_category(aqi_value):
+    """Get AQI category"""
+    aqi = float(aqi_value)
+    if aqi <= 50:
+        return "Good", "#10B981"
+    elif aqi <= 100:
+        return "Moderate", "#F59E0B"
+    elif aqi <= 150:
+        return "Unhealthy for Sensitive", "#F97316"
+    elif aqi <= 200:
+        return "Unhealthy", "#EF4444"
+    elif aqi <= 300:
+        return "Very Unhealthy", "#8B5CF6"
+    else:
+        return "Hazardous", "#7C3AED"
+
+def main():
+    """Main function"""
+    print("=" * 70)
+    print("📊 EDA ANALYSIS FOR AQI KARACHI")
+    print("=" * 70)
+    
+    # Load data
+    df = load_historical_data(days=45)
+    
+    if df.empty:
+        print("❌ No data available for EDA")
+        return
+    
+    # Generate EDA report
+    generate_eda_report(df)
+    
+    print("\n" + "=" * 70)
+    print("🎉 EDA COMPLETE!")
+    print("=" * 70)
+
+if __name__ == "__main__":
+    main()
+    

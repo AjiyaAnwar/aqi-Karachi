@@ -1,0 +1,4 @@
+date,predicted_aqi,confidence,category
+2026-01-24,108.8,0.8,Unhealthy for Sensitive
+2026-01-25,108.8,0.6,Unhealthy for Sensitive
+2026-01-26,101.8,0.5,Unhealthy for Sensitive

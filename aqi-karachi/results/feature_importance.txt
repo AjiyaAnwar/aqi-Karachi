@@ -1,0 +1,15 @@
+AQI Karachi - Feature Importance Report
+==================================================
+
+Top Features for AQI Prediction:
+
+lag_6h: 45.0889
+rolling_mean_6h: 37.5003
+lag_1h: 16.0750
+hour_norm: 0.0169
+is_weekend: -0.0551
+lag_24h: -34.5813
+rolling_mean_24h: -52.6610
+pm25: -65.4035
+aqi: -69.3947
+pm10: -73.1509

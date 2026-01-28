@@ -1,0 +1,60 @@
+{
+  "generated_at": "2026-01-28T12:01:15.984194",
+  "time_series_forecast": [
+    {
+      "date": "2026-01-29",
+      "predicted_aqi": 93.1,
+      "category": "Moderate",
+      "model": "timeseries"
+    },
+    {
+      "date": "2026-01-30",
+      "predicted_aqi": 91.6,
+      "category": "Moderate",
+      "model": "timeseries"
+    },
+    {
+      "date": "2026-01-31",
+      "predicted_aqi": 89.9,
+      "category": "Moderate",
+      "model": "timeseries"
+    }
+  ],
+  "ml_forecast": [
+    {
+      "date": "2026-01-29",
+      "predicted_aqi": 119.2,
+      "category": "Unhealthy for Sensitive Groups",
+      "model": "ml_error"
+    },
+    {
+      "date": "2026-01-30",
+      "predicted_aqi": 120.0,
+      "category": "Unhealthy for Sensitive Groups",
+      "model": "ml_error"
+    },
+    {
+      "date": "2026-01-31",
+      "predicted_aqi": 101.5,
+      "category": "Unhealthy for Sensitive Groups",
+      "model": "ml_error"
+    }
+  ],
+  "ensemble_forecast": [
+    {
+      "date": "2026-01-29",
+      "predicted_aqi": 106.2,
+      "category": "Unhealthy for Sensitive Groups"
+    },
+    {
+      "date": "2026-01-30",
+      "predicted_aqi": 105.8,
+      "category": "Unhealthy for Sensitive Groups"
+    },
+    {
+      "date": "2026-01-31",
+      "predicted_aqi": 95.7,
+      "category": "Moderate"
+    }
+  ]
+}

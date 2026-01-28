@@ -1,0 +1,9 @@
+timestamp,date,hour,predicted_aqi,category
+2026-01-28 12:49:52.080729,2026-01-28,12,114.5,Unhealthy for Sensitive
+2026-01-28 15:49:52.080729,2026-01-28,15,113.9,Unhealthy for Sensitive
+2026-01-28 18:49:52.080729,2026-01-28,18,113.9,Unhealthy for Sensitive
+2026-01-28 21:49:52.080729,2026-01-28,21,110.7,Unhealthy for Sensitive
+2026-01-29 00:49:52.080729,2026-01-29,0,111.6,Unhealthy for Sensitive
+2026-01-29 03:49:52.080729,2026-01-29,3,112.0,Unhealthy for Sensitive
+2026-01-29 06:49:52.080729,2026-01-29,6,112.2,Unhealthy for Sensitive
+2026-01-29 09:49:52.080729,2026-01-29,9,110.9,Unhealthy for Sensitive
