@@ -1,6 +1,6 @@
 """
-📊 AQI-Karachi Dashboard: COMPLETE VERSION
-Includes Full EDA + Feature Importance + 3-Day Forecasts
+📊 AQI-Karachi Dashboard: COMPLETE VERSION WITH FRESHNESS CHECK
+Includes Full EDA + Feature Importance + 3-Day Forecasts + Freshness Indicator
 """
 import streamlit as st
 import pandas as pd
@@ -12,6 +12,7 @@ import os
 import sys
 from dotenv import load_dotenv
 import warnings
+import time
 warnings.filterwarnings('ignore')
 
 # Add src to path
@@ -21,6 +22,95 @@ if os.path.exists(src_dir):
     sys.path.insert(0, src_dir)
 
 load_dotenv()
+
+# ==================== PREDICTION FRESHNESS FUNCTIONS ====================
+@st.cache_data(ttl=300)  # 5 minute cache
+def check_prediction_freshness():
+    """Check if predictions are fresh (<3 hours old)"""
+    try:
+        from pymongo import MongoClient
+        
+        uri = os.getenv("MONGODB_URI")
+        if not uri:
+            return "error", "No database connection", None
+        
+        db_name = os.getenv("MONGODB_DATABASE", "aqi_predictor")
+        
+        client = MongoClient(uri)
+        db = client[db_name]
+        
+        # Check ensemble forecasts
+        latest = db.ensemble_forecasts_3day.find_one(
+            sort=[('created_at', -1)]
+        )
+        
+        client.close()
+        
+        if not latest:
+            return "no_data", "No predictions found", None
+        
+        created_at = latest.get('created_at')
+        if isinstance(created_at, str):
+            created_at = datetime.fromisoformat(created_at.replace('Z', ''))
+        
+        age_hours = (datetime.now() - created_at).total_seconds() / 3600
+        
+        if age_hours < 3:
+            status = "fresh"
+            message = f"Updated {age_hours:.1f} hours ago"
+        elif age_hours < 6:
+            status = "stale"
+            message = f"Updated {age_hours:.1f} hours ago"
+        elif age_hours < 12:
+            status = "very_stale"
+            message = f"Updated {age_hours:.1f} hours ago"
+        else:
+            status = "outdated"
+            message = f"Updated {age_hours:.1f} hours ago"
+        
+        return status, message, created_at
+        
+    except Exception as e:
+        return "error", f"Error: {str(e)[:50]}", None
+
+def trigger_prediction_update():
+    """Trigger background prediction update"""
+    try:
+        # Try to import prediction service
+        project_root = os.path.dirname(os.path.dirname(current_dir))
+        model_training_dir = os.path.join(project_root, 'model_training')
+        
+        if os.path.exists(model_training_dir):
+            sys.path.insert(0, model_training_dir)
+            
+            try:
+                from prediction_service import PredictionService
+                service = PredictionService()
+                success = service.trigger_async_prediction_update()
+                return success
+            except ImportError:
+                # Try to run the script directly
+                import subprocess
+                script_path = os.path.join(model_training_dir, 'prediction_service.py')
+                if os.path.exists(script_path):
+                    subprocess.Popen([sys.executable, script_path])
+                    return True
+        
+        return False
+    except:
+        return False
+
+def get_freshness_icon(status):
+    """Get icon for freshness status"""
+    icons = {
+        "fresh": "✅",
+        "stale": "⚠️",
+        "very_stale": "🔄",
+        "outdated": "❌",
+        "no_data": "📭",
+        "error": "🔧"
+    }
+    return icons.get(status, "❓")
 
 # Helper function to ensure datetime
 def ensure_datetime(timestamp):
@@ -83,6 +173,34 @@ st.markdown("""
         border-radius: 10px;
         border-left: 5px solid #EF4444;
         margin-bottom: 1rem;
+    }
+    .freshness-fresh { 
+        background-color: #D1FAE5;
+        color: #065F46;
+        padding: 0.5rem;
+        border-radius: 5px;
+        border-left: 4px solid #10B981;
+    }
+    .freshness-stale { 
+        background-color: #FEF3C7;
+        color: #92400E;
+        padding: 0.5rem;
+        border-radius: 5px;
+        border-left: 4px solid #F59E0B;
+    }
+    .freshness-very-stale { 
+        background-color: #FEE2E2;
+        color: #991B1B;
+        padding: 0.5rem;
+        border-radius: 5px;
+        border-left: 4px solid #EF4444;
+    }
+    .freshness-outdated { 
+        background-color: #F3F4F6;
+        color: #6B7280;
+        padding: 0.5rem;
+        border-radius: 5px;
+        border-left: 4px solid #9CA3AF;
     }
     .aqi-good { color: #10B981; font-weight: bold; }
     .aqi-moderate { color: #F59E0B; font-weight: bold; }
@@ -611,6 +729,18 @@ def create_feature_importance_plot(importance_data):
 
 # ==================== SIDEBAR NAVIGATION ====================
 st.sidebar.title("🌫️ AQI Karachi Dashboard")
+
+# Check prediction freshness for sidebar display
+freshness_status, freshness_msg, last_updated = check_prediction_freshness()
+freshness_icon = get_freshness_icon(freshness_status)
+
+st.sidebar.markdown(f"""
+### Prediction Status
+<div class="freshness-{freshness_status}" style="padding: 10px; border-radius: 5px; margin-bottom: 20px;">
+    {freshness_icon} **{freshness_msg}**
+</div>
+""", unsafe_allow_html=True)
+
 page = st.sidebar.radio(
     "Navigate to:",
     [
@@ -627,21 +757,55 @@ page = st.sidebar.radio(
 )
 
 st.sidebar.markdown("---")
-st.sidebar.info("**Karachi AQI Prediction System**\n\nReal-time air quality forecasting using 45-day Open-Meteo data.")
 
-# Add refresh button
-if st.sidebar.button("🔄 Refresh All Data", use_container_width=True):
+# Update button in sidebar
+if st.sidebar.button("🔄 Update Predictions Now", use_container_width=True, type="secondary"):
+    with st.sidebar:
+        with st.spinner("Updating predictions..."):
+            if trigger_prediction_update():
+                st.success("Update triggered!")
+                time.sleep(2)
+                st.rerun()
+            else:
+                st.error("Failed to trigger update")
+
+# Refresh all data button
+if st.sidebar.button("🗂️ Refresh All Data", use_container_width=True):
     st.cache_data.clear()
     st.rerun()
+
+st.sidebar.markdown("---")
+st.sidebar.info("**Karachi AQI Prediction System**\n\nReal-time air quality forecasting using 45-day Open-Meteo data.")
 
 # ==================== HOME PAGE ====================
 if page == "🏠 Home":
     st.markdown('<h1 class="main-header">🌫️ AQI Karachi - Air Quality Prediction System</h1>', unsafe_allow_html=True)
     
-    col1, col2, col3 = st.columns([1, 2, 1])
+    # System status banner
+    col1, col2, col3 = st.columns([2, 1, 1])
+    
+    with col1:
+        st.markdown(f"""
+        <div class="freshness-{freshness_status}" style="padding: 15px; border-radius: 8px; margin-bottom: 20px;">
+            <h4 style="margin: 0;">{freshness_icon} System Status: {freshness_status.upper().replace('_', ' ')}</h4>
+            <p style="margin: 5px 0 0 0;">{freshness_msg}</p>
+            {f"<small>Last update: {last_updated.strftime('%Y-%m-%d %H:%M') if last_updated else 'Unknown'}</small>"}
+        </div>
+        """, unsafe_allow_html=True)
     
     with col2:
-        st.markdown("### Karachi Air Quality Monitoring")
+        if st.button("🔄 Update Now", use_container_width=True):
+            if trigger_prediction_update():
+                st.success("Update triggered!")
+                time.sleep(2)
+                st.rerun()
+    
+    with col3:
+        if st.button("🔍 Check Now", use_container_width=True):
+            st.cache_data.clear()
+            st.rerun()
+    
+    st.markdown("### Welcome to Karachi Air Quality Monitoring System")
     
     st.markdown("""
     ## 🎯 Project Overview
@@ -651,22 +815,23 @@ if page == "🏠 Home":
     - **45 days of historical data** from Open-Meteo API
     - **Time series forecasting** for AQI predictions
     - **Machine learning models** trained on environmental factors
+    - **Automated updates** every 3 hours
     
     ### 📋 Key Features:
-    1. **Real-time AQI Monitoring** - Current air quality status
+    1. **Real-time AQI Monitoring** - Current air quality status with freshness indicator
     2. **EDA Analysis** - Exploratory Data Analysis with visualizations
     3. **Feature Importance** - Understand what drives AQI predictions
     4. **Historical Trends** - Data visualization and analysis
-    5. **3-Day Forecast** - Predictive analytics for future AQI
+    5. **3-Day Forecast** - Predictive analytics for future AQI (always fresh!)
     6. **Health Recommendations** - Precautions based on AQI levels
     7. **Model Comparison** - Performance metrics of different algorithms
     
     ### 🚀 How It Works:
-    1. **Data Collection**: 45-day Open-Meteo data → MongoDB
+    1. **Data Collection**: Every 3 hours → MongoDB
     2. **Feature Engineering**: Extract time-based features
-    3. **Model Training**: Time series and ML models
-    4. **Prediction**: Generate AQI forecasts
-    5. **Dashboard**: Visualize results and provide health guidance
+    3. **Model Training**: Twice daily → Time series and ML models
+    4. **Prediction Generation**: Every 3 hours → Fresh 3-day forecasts
+    5. **Dashboard**: Visualize results with freshness check
     """)
     
     # Quick stats
@@ -704,6 +869,25 @@ if page == "🏠 Home":
             st.metric("Best R²", f"{best_r2:.3f}")
         else:
             st.metric("Best R²", "N/A")
+    
+    # Freshness explanation
+    with st.expander("ℹ️ About Prediction Freshness"):
+        st.markdown("""
+        **What does freshness mean?**
+        
+        - **✅ Fresh (<3 hours)**: Predictions are up-to-date
+        - **⚠️ Stale (3-6 hours)**: Predictions are getting old
+        - **🔄 Very Stale (6-12 hours)**: Predictions need updating
+        - **❌ Outdated (>12 hours)**: Predictions are too old
+        
+        **Automatic Updates:**
+        - Data collection: Every 3 hours
+        - Model training: Twice daily (3 AM & 3 PM)
+        - Predictions: Every 3 hours
+        
+        **Manual Updates:**
+        Click the "Update Now" button to generate fresh predictions immediately!
+        """)
 
 # ==================== CURRENT AQI PAGE ====================
 elif page == "📊 Current AQI":
@@ -1546,7 +1730,6 @@ elif page == "🎯 Feature Importance":
         
         **Note**: Feature importance is only available for models that support it (Random Forest, Linear Models, etc.)
         """)
-
 # ==================== HISTORICAL TRENDS PAGE ====================
 elif page == "📊 Historical Trends":
     st.markdown('<h1 class="main-header">📊 Historical AQI Trends</h1>', unsafe_allow_html=True)
@@ -1556,15 +1739,33 @@ elif page == "📊 Historical Trends":
     hist_data = load_historical_data(days_to_load)
     
     if not hist_data.empty:
-        # Time Series Plot
+        # Time Series Plot - FIXED VERSION
         st.markdown('<h2 class="sub-header">⏰ AQI Time Series</h2>', unsafe_allow_html=True)
         
         if 'timestamp' in hist_data.columns and 'aqi' in hist_data.columns:
-            fig = px.line(hist_data, x='timestamp', y='aqi',
-                         title=f'AQI Trend - Last {days_to_load} Days',
-                         labels={'aqi': 'AQI', 'timestamp': 'Time'},
-                         line_shape='spline')
-            fig.update_layout(height=400)
+            # Use go.Figure instead of px.line for spline support
+            fig = go.Figure()
+            
+            fig.add_trace(go.Scatter(
+                x=hist_data['timestamp'],
+                y=hist_data['aqi'],
+                mode='lines',
+                name='AQI',
+                line=dict(color='#3B82F6', width=2, shape='spline', smoothing=1.3),
+                hovertemplate='<b>Date:</b> %{x|%Y-%m-%d %H:%M}<br><b>AQI:</b> %{y:.1f}<extra></extra>',
+                fill='tozeroy',
+                fillcolor='rgba(59, 130, 246, 0.1)'
+            ))
+            
+            fig.update_layout(
+                title=f'AQI Trend - Last {days_to_load} Days',
+                xaxis_title='Time',
+                yaxis_title='AQI',
+                height=400,
+                hovermode='x unified',
+                showlegend=False
+            )
+            
             st.plotly_chart(fig, use_container_width=True)
         else:
             st.warning("Timestamp or AQI column not found in data")
@@ -1572,38 +1773,54 @@ elif page == "📊 Historical Trends":
         # Daily Averages
         st.markdown('<h2 class="sub-header">📅 Daily Averages</h2>', unsafe_allow_html=True)
         
-        if 'date' in hist_data.columns and 'aqi' in hist_data.columns:
+        if 'timestamp' in hist_data.columns and 'aqi' in hist_data.columns:
+            hist_data['date'] = hist_data['timestamp'].dt.date
             daily_avg = hist_data.groupby('date')['aqi'].agg(['mean', 'min', 'max']).reset_index()
             
             fig = go.Figure()
+            
+            # Mean line
             fig.add_trace(go.Scatter(
                 x=daily_avg['date'],
                 y=daily_avg['mean'],
                 mode='lines+markers',
-                name='Daily Avg',
-                line=dict(color='#3B82F6', width=3)
+                name='Daily Average',
+                line=dict(color='#3B82F6', width=3),
+                marker=dict(size=6, color='#3B82F6'),
+                hovertemplate='<b>Date:</b> %{x}<br><b>Avg AQI:</b> %{y:.1f}<extra></extra>'
             ))
-            fig.add_trace(go.Scatter(
-                x=daily_avg['date'],
-                y=daily_avg['min'],
-                mode='lines',
-                name='Daily Min',
-                line=dict(color='#10B981', width=1, dash='dash')
-            ))
+            
+            # Min-Max range
             fig.add_trace(go.Scatter(
                 x=daily_avg['date'],
                 y=daily_avg['max'],
                 mode='lines',
-                name='Daily Max',
-                line=dict(color='#EF4444', width=1, dash='dash')
+                name='Max',
+                line=dict(width=0),
+                showlegend=False,
+                hoverinfo='skip'
+            ))
+            
+            fig.add_trace(go.Scatter(
+                x=daily_avg['date'],
+                y=daily_avg['min'],
+                mode='lines',
+                name='Min',
+                line=dict(width=0),
+                fill='tonexty',
+                fillcolor='rgba(59, 130, 246, 0.2)',
+                showlegend=False,
+                hovertemplate='<b>Date:</b> %{x}<br><b>Min AQI:</b> %{y:.1f}<extra></extra>'
             ))
             
             fig.update_layout(
                 title='Daily AQI Statistics',
                 xaxis_title='Date',
                 yaxis_title='AQI',
-                height=400
+                height=400,
+                hovermode='x unified'
             )
+            
             st.plotly_chart(fig, use_container_width=True)
         
         # AQI Categories Over Time
@@ -1624,9 +1841,45 @@ elif page == "📊 Historical Trends":
     else:
         st.warning("No historical data available.")
 
-# ==================== 3-DAY FORECAST PAGE ====================
+# ==================== 3-DAY FORECAST PAGE (UPDATED WITH FRESHNESS) ====================
 elif page == "🔮 3-Day Forecast":
     st.markdown('<h1 class="main-header">🔮 3-Day AQI Forecast</h1>', unsafe_allow_html=True)
+    
+    # Check prediction freshness
+    freshness_status, freshness_msg, last_updated = check_prediction_freshness()
+    freshness_icon = get_freshness_icon(freshness_status)
+    
+    # Display freshness banner
+    st.markdown(f"""
+    <div class="freshness-{freshness_status}" style="padding: 15px; border-radius: 8px; margin-bottom: 20px;">
+        <h4 style="margin: 0;">{freshness_icon} Forecast Status: {freshness_status.upper().replace('_', ' ')}</h4>
+        <p style="margin: 5px 0 0 0;">{freshness_msg}</p>
+        {f"<small>Last update: {last_updated.strftime('%Y-%m-%d %H:%M') if last_updated else 'Unknown'}</small>"}
+    </div>
+    """, unsafe_allow_html=True)
+    
+    # Control buttons
+    col1, col2, col3 = st.columns([2, 1, 1])
+    
+    with col1:
+        if freshness_status in ["stale", "very_stale", "outdated", "no_data", "error"]:
+            st.warning("⚠️ Forecasts need updating for accurate predictions")
+    
+    with col2:
+        if st.button("🔄 Update Now", use_container_width=True, type="primary"):
+            with st.spinner("Generating fresh forecasts..."):
+                if trigger_prediction_update():
+                    st.success("Update triggered! Refreshing...")
+                    time.sleep(3)
+                    st.cache_data.clear()
+                    st.rerun()
+                else:
+                    st.error("Failed to trigger update")
+    
+    with col3:
+        if st.button("🔍 Refresh", use_container_width=True):
+            st.cache_data.clear()
+            st.rerun()
     
     # Load all types of forecasts
     ml_forecast = load_ml_forecast()
@@ -1844,28 +2097,10 @@ elif page == "🔮 3-Day Forecast":
         ```bash
         python runallmodels.py
         ```
-        (Choose option 1 - Combined Training)
         
         **Step 2: Check if forecasts were generated**
-        ```bash
-        python -c "
-        from pymongo import MongoClient
-        import os
-        from dotenv import load_dotenv
-        load_dotenv()
-        client = MongoClient(os.getenv('MONGODB_URI'))
-        db = client[os.getenv('MONGODB_DATABASE')]
-        collections = db.list_collection_names()
-        print('Forecast collections found:')
-        for coll in ['ml_forecasts_3day', 'timeseries_forecasts_3day', 'ensemble_forecasts_3day']:
-            if coll in collections:
-                count = db[coll].count_documents({})
-                print(f'  {coll}: {count} records')
-        client.close()
-        "
-        ```
         
-        **Step 3: Refresh this dashboard** after training completes
+        **Step 3: Click 'Update Now' button above to generate fresh forecasts**
         """)
 
 # ==================== MODEL PERFORMANCE PAGE ====================
@@ -1972,8 +2207,8 @@ elif page == "ℹ️ Project Info":
         A comprehensive solution for monitoring and forecasting air quality in Karachi, Pakistan.
         
         ### 🎯 Objectives:
-        1. **Real-time Monitoring** - Track current air quality
-        2. **Predictive Analytics** - Forecast AQI for next 3 days
+        1. **Real-time Monitoring** - Track current air quality with freshness indicator
+        2. **Predictive Analytics** - Forecast AQI for next 3 days (always fresh!)
         3. **EDA Analysis** - Exploratory data analysis with visualizations
         4. **Feature Importance** - Understand what drives AQI predictions
         5. **Health Guidance** - Provide precautions based on AQI
@@ -1981,7 +2216,7 @@ elif page == "ℹ️ Project Info":
         
         ### 🛠️ Technology Stack:
         - **Backend**: Python, MongoDB, Open-Meteo API
-        - **ML Models**: Random Forest, XGBoost, etc.
+        - **ML Models**: Random Forest, XGBoost, Time Series
         - **Dashboard**: Streamlit, Plotly
         - **Data Pipeline**: Automated collection & processing
         
@@ -1989,12 +2224,12 @@ elif page == "ℹ️ Project Info":
         1. **Open-Meteo API** - Historical weather & air quality
         2. **45-day historical data** - For model training
         
-        ### 🔄 Pipeline:
-        1. **Data Collection** → MongoDB
-        2. **Feature Engineering** → Time-based features
-        3. **Model Training** → ML + Time Series
-        4. **Prediction** → 3-day forecasts
-        5. **Dashboard** → Visualization & alerts
+        ### 🔄 Pipeline (Automated):
+        1. **Data Collection** → Every 3 hours → MongoDB
+        2. **Feature Engineering** → Daily → Time-based features
+        3. **Model Training** → Twice daily → ML + Time Series
+        4. **Prediction** → Every 3 hours → Fresh 3-day forecasts
+        5. **Dashboard** → Visualization & alerts with freshness check
         """)
     
     with col2:
@@ -2007,7 +2242,7 @@ elif page == "ℹ️ Project Info":
         aqi-karachi/
         ├── dashboard.py          # This dashboard
         ├── data_pipeline/        # Data collection
-        ├── model_training/       # ML models
+        ├── model_training/       # ML models + prediction service
         ├── .env                  # Configuration
         └── requirements.txt      # Dependencies
         ```
@@ -2019,15 +2254,15 @@ elif page == "ℹ️ Project Info":
         
         ### 🚀 Getting Started
         1. Set up `.env` file
-        2. Run data collection
+        2. Run initial data collection
         3. Launch dashboard
-        4. Train models (optional)
+        4. Click "Update Now" for fresh forecasts
         """)
     
     # System Status
     st.markdown("### 🖥️ System Status")
     
-    col1, col2, col3 = st.columns(3)
+    col1, col2, col3, col4 = st.columns(4)
     
     with col1:
         try:
@@ -2056,6 +2291,17 @@ elif page == "ℹ️ Project Info":
             st.success(f"✅ {len(hist_data)} records")
         else:
             st.warning("⚠️ No History")
+    
+    with col4:
+        freshness_status, freshness_msg, _ = check_prediction_freshness()
+        if freshness_status == "fresh":
+            st.success("✅ Fresh")
+        elif freshness_status == "stale":
+            st.warning("⚠️ Stale")
+        elif freshness_status == "very_stale":
+            st.error("❌ Very Stale")
+        else:
+            st.info("ℹ️ Unknown")
 
 # ==================== SYSTEM STATUS PAGE ====================
 elif page == "⚙️ System Status":
@@ -2088,8 +2334,9 @@ elif page == "⚙️ System Status":
     with col2:
         st.info("""
         **Current Settings:**
-        - Data Collection: 45 days
-        - Update Frequency: Manual
+        - Data Collection: Every 3 hours (incremental)
+        - Model Training: Twice daily (3 AM & 3 PM)
+        - Prediction Updates: Every 3 hours
         - Storage: MongoDB Atlas
         - Location: Karachi, Pakistan
         """)
@@ -2138,6 +2385,23 @@ elif page == "⚙️ System Status":
                 count = db.ensemble_forecasts_3day.count_documents({}) if 'ensemble_forecasts_3day' in collections else 0
                 st.metric("Ensemble Forecasts", f"{count}")
             
+            # Prediction freshness
+            st.markdown("### ⏱️ Prediction Freshness")
+            
+            freshness_status, freshness_msg, last_updated = check_prediction_freshness()
+            
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                st.metric("Status", freshness_status.upper().replace('_', ' '))
+            
+            with col2:
+                if last_updated:
+                    age_hours = (datetime.now() - last_updated).total_seconds() / 3600
+                    st.metric("Age", f"{age_hours:.1f} hours")
+                else:
+                    st.metric("Age", "Unknown")
+            
             client.close()
         else:
             st.warning("MongoDB URI not configured")
@@ -2150,30 +2414,22 @@ elif page == "⚙️ System Status":
     col1, col2, col3 = st.columns(3)
     
     with col1:
-        if st.button("📥 Run Data Collection", use_container_width=True):
-            st.info("To collect data, run:\n```bash\npython data_pipeline/collect_historical.py\n```")
+        if st.button("📥 Collect New Data", use_container_width=True):
+            st.info("To collect data, run:\n```bash\npython data_pipeline/collect_historical.py --incremental\n```")
     
     with col2:
-        if st.button("🔄 Refresh Dashboard", use_container_width=True):
-            st.cache_data.clear()
-            st.rerun()
+        if st.button("🤖 Generate Predictions", use_container_width=True):
+            if trigger_prediction_update():
+                st.success("Prediction update triggered!")
+                time.sleep(2)
+                st.rerun()
+            else:
+                st.error("Failed to trigger update")
     
     with col3:
-        if st.button("📋 View Collections", use_container_width=True):
-            try:
-                from pymongo import MongoClient
-                uri = os.getenv("MONGODB_URI")
-                if uri:
-                    client = MongoClient(uri, serverSelectionTimeoutMS=3000)
-                    db = client[os.getenv("MONGODB_DATABASE", "aqi_predictor")]
-                    collections = db.list_collection_names()
-                    st.write("**Collections:**", collections)
-                    for coll in collections:
-                        count = db[coll].count_documents({})
-                        st.write(f"- {coll}: {count} records")
-                    client.close()
-            except Exception as e:
-                st.error(f"Error: {e}")
+        if st.button("🔄 Refresh All", use_container_width=True):
+            st.cache_data.clear()
+            st.rerun()
 
 # ==================== RUN THE APP ====================
 if __name__ == "__main__":
@@ -2184,7 +2440,8 @@ if __name__ == "__main__":
         <div style='text-align: center'>
             <p>🌫️ AQI Karachi Prediction System | 
             <a href='https://github.com/AjiyaAnwar/aqi-Karachi' target='_blank'>GitHub</a> | 
-            Updated: {}</p>
+            Dashboard: {}</p>
+            <p><small>Predictions updated every 3 hours | Data collected hourly | Models trained twice daily</small></p>
         </div>
         """.format(datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
         unsafe_allow_html=True

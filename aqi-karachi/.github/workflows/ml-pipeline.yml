@@ -1,0 +1,236 @@
+name: ML Pipeline - OPTIMIZED
+
+on:
+  schedule:
+    # Incremental data collection every 3 hours
+    - cron: '0 */3 * * *'
+    
+    # Feature engineering daily at 1 AM
+    - cron: '0 1 * * *'
+    
+    # EDA daily at 2 AM
+    - cron: '0 2 * * *'
+    
+    # Model training + predictions twice daily (3 AM & 3 PM)
+    - cron: '0 3 * * *'
+    - cron: '0 15 * * *'
+    
+    # Full pipeline + prediction refresh every Sunday at 4 AM
+    - cron: '0 4 * * 0'
+    
+  workflow_dispatch:
+    inputs:
+      pipeline_step:
+        description: 'Select pipeline step to run'
+        required: false
+        default: 'full'
+        type: choice
+        options:
+          - data_incremental
+          - data_full
+          - features
+          - eda
+          - train
+          - predictions
+          - full
+      force_run:
+        description: 'Force run even if not scheduled'
+        required: false
+        default: false
+        type: boolean
+  
+  push:
+    branches: [main, master]
+    paths:
+      - 'data_pipeline/**'
+      - 'model_training/**'
+      - 'cicd/**'
+      - '.github/workflows/**'
+      - 'requirements.txt'
+
+jobs:
+  execute-pipeline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    environment: production
+    
+    env:
+      # MongoDB Configuration
+      MONGODB_URI: ${{ secrets.MONGODB_URI }}
+      MONGODB_DATABASE: aqi_predictor
+      
+      # City Configuration
+      CITY_NAME: Karachi
+      CITY_LAT: 24.8607
+      CITY_LON: 67.0011
+      TIMEZONE: Asia/Karachi
+      
+      # Pipeline Configuration
+      HISTORICAL_DAYS: 45
+      TRAINING_THRESHOLD: 0.7
+      DATA_RETENTION_DAYS: 30
+      
+      # GitHub Actions Environment
+      GITHUB_ACTIONS: true
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+    
+    - name: Setup Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.10'
+        cache: 'pip'
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        if [ -f "requirements.txt" ]; then
+          pip install -r requirements.txt
+        fi
+        pip install pymongo python-dotenv schedule pymongo[srv]
+    
+    - name: Create required directories
+      run: |
+        mkdir -p logs
+        mkdir -p data
+        mkdir -p models
+        mkdir -p reports
+    
+    - name: Determine pipeline step
+      id: determine_step
+      run: |
+        echo "🔍 Determining pipeline step..."
+        
+        if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+          # Manual trigger
+          STEP="${{ github.event.inputs.pipeline_step }}"
+          echo "Manual trigger, step: $STEP"
+          echo "step=$STEP" >> $GITHUB_OUTPUT
+          
+        elif [[ "${{ github.event_name }}" == "schedule" ]]; then
+          # Scheduled trigger
+          HOUR=$(date -u +%H)
+          DAY=$(date -u +%u)  # 1=Monday, 7=Sunday
+          
+          echo "Scheduled trigger, UTC Hour: $HOUR"
+          
+          case $HOUR in
+            "00"|"03"|"06"|"09"|"12"|"15"|"18"|"21")
+              # Every 3 hours - incremental data
+              echo "Running incremental data collection"
+              echo "step=data_incremental" >> $GITHUB_OUTPUT
+              ;;
+            "01")
+              echo "Running feature engineering"
+              echo "step=features" >> $GITHUB_OUTPUT
+              ;;
+            "02")
+              echo "Running EDA"
+              echo "step=eda" >> $GITHUB_OUTPUT
+              ;;
+            "03")
+              echo "Running model training + predictions"
+              echo "step=train" >> $GITHUB_OUTPUT
+              ;;
+            "04")
+              if [[ $DAY -eq 7 ]]; then
+                echo "Running full pipeline (Sunday)"
+                echo "step=full" >> $GITHUB_OUTPUT
+              else
+                echo "Skipping (not Sunday)"
+                echo "step=skip" >> $GITHUB_OUTPUT
+              fi
+              ;;
+            "15")
+              echo "Running afternoon predictions update"
+              echo "step=predictions" >> $GITHUB_OUTPUT
+              ;;
+            *)
+              echo "No scheduled task for this hour"
+              echo "step=skip" >> $GITHUB_OUTPUT
+              ;;
+          esac
+          
+        else
+          # Push event
+          echo "Push event, running full pipeline"
+          echo "step=full" >> $GITHUB_OUTPUT
+        fi
+    
+    - name: Execute pipeline step
+      id: execute_pipeline
+      if: steps.determine_step.outputs.step != 'skip'
+      run: |
+        STEP="${{ steps.determine_step.outputs.step }}"
+        
+        echo "🚀 Executing: $STEP"
+        echo "🕒 Current UTC: $(date -u '+%Y-%m-%d %H:%M:%S')"
+        
+        case $STEP in
+          "data_incremental")
+            echo "📥 Running incremental data collection..."
+            python data_pipeline/collect_historical.py --incremental --hours=6
+            ;;
+          "data_full")
+            echo "📚 Running full data collection..."
+            python data_pipeline/collect_historical.py
+            ;;
+          "features")
+            echo "🔧 Running feature engineering..."
+            python data_pipeline/feature.py
+            ;;
+          "eda")
+            echo "📊 Running EDA..."
+            python cicd/scripts/run_eda.py
+            ;;
+          "train")
+            echo "🤖 Running model training..."
+            python model_training/combinedtraining.py
+            ;;
+          "predictions")
+            echo "🔮 Running prediction generation..."
+            python model_training/prediction_service.py
+            ;;
+          "full")
+            echo "🚀 Running full pipeline..."
+            echo "1️⃣ Collecting data..."
+            python data_pipeline/collect_historical.py --incremental --hours=24
+            echo "2️⃣ Feature engineering..."
+            python data_pipeline/feature.py
+            echo "3️⃣ Training models..."
+            python model_training/combinedtraining.py
+            echo "4️⃣ Generating predictions..."
+            python model_training/prediction_service.py
+            ;;
+        esac
+        
+        echo "✅ Step $STEP completed"
+    
+    - name: Upload artifacts
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: pipeline-output-${{ github.run_id }}
+        path: |
+          logs/
+          data/*.csv
+          reports/
+        retention-days: 7
+    
+    - name: Cleanup
+      if: always()
+      run: |
+        echo "🧹 Cleaning up..."
+        find . -name "*.pyc" -delete
+        find . -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null || true
+    
+    - name: Summary
+      if: always()
+      run: |
+        echo "📊 PIPELINE SUMMARY"
+        echo "Run ID: ${{ github.run_id }}"
+        echo "Step: ${{ steps.determine_step.outputs.step }}"
+        echo "Status: ${{ job.status }}"
+        echo "Timestamp: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
