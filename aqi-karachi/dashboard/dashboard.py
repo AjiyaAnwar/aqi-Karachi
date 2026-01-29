@@ -8,6 +8,7 @@ import numpy as np
 import plotly.graph_objects as go
 import plotly.express as px
 from datetime import datetime, timedelta
+import subprocess  # Add this with other imports at the top
 import os
 import sys
 from dotenv import load_dotenv
@@ -72,32 +73,33 @@ def check_prediction_freshness():
         
     except Exception as e:
         return "error", f"Error: {str(e)[:50]}", None
-
 def trigger_prediction_update():
-    """Trigger background prediction update"""
+    """Actually run prediction update - returns success status"""
     try:
-        # Try to import prediction service
+        # Get project root
         project_root = os.path.dirname(os.path.dirname(current_dir))
-        model_training_dir = os.path.join(project_root, 'model_training')
+        script_path = os.path.join(project_root, "model_training", "run_quick_predictions.py")
         
-        if os.path.exists(model_training_dir):
-            sys.path.insert(0, model_training_dir)
+        if os.path.exists(script_path):
+            result = subprocess.run(
+                [sys.executable, script_path],
+                capture_output=True,
+                text=True,
+                cwd=project_root,
+                timeout=120
+            )
             
-            try:
-                from prediction_service import PredictionService
-                service = PredictionService()
-                success = service.trigger_async_prediction_update()
-                return success
-            except ImportError:
-                # Try to run the script directly
-                import subprocess
-                script_path = os.path.join(model_training_dir, 'prediction_service.py')
-                if os.path.exists(script_path):
-                    subprocess.Popen([sys.executable, script_path])
-                    return True
-        
-        return False
-    except:
+            # Print output for debugging
+            print(f"Prediction update stdout: {result.stdout[:200]}")
+            if result.stderr:
+                print(f"Prediction update stderr: {result.stderr[:200]}")
+            
+            return result.returncode == 0
+        else:
+            print(f"Script not found: {script_path}")
+            return False
+    except Exception as e:
+        print(f"Error in trigger_prediction_update: {e}")
         return False
 
 def get_freshness_icon(status):
@@ -793,12 +795,44 @@ if page == "🏠 Home":
         </div>
         """, unsafe_allow_html=True)
     
-    with col2:
+        with col2:
         if st.button("🔄 Update Now", use_container_width=True):
-            if trigger_prediction_update():
-                st.success("Update triggered!")
-                time.sleep(2)
-                st.rerun()
+            with st.spinner("Updating predictions..."):
+                try:
+                    # Get project root
+                    project_root = os.path.dirname(os.path.dirname(current_dir))
+                    script_path = os.path.join(project_root, "model_training", "run_quick_predictions.py")
+                    
+                    if os.path.exists(script_path):
+                        result = subprocess.run(
+                            [sys.executable, script_path],
+                            capture_output=True,
+                            text=True,
+                            cwd=project_root,
+                            timeout=120
+                        )
+                        
+                        if result.returncode == 0:
+                            st.success("✅ Update triggered successfully!")
+                            # Show last 5 lines of output
+                            output_lines = result.stdout.strip().split('\n')
+                            if len(output_lines) > 5:
+                                with st.expander("📊 See output"):
+                                    st.code('\n'.join(output_lines[-5:]), language='text')
+                            time.sleep(3)
+                            st.cache_data.clear()
+                            st.rerun()
+                        else:
+                            st.error("❌ Update failed")
+                            if result.stderr:
+                                st.code(result.stderr[:200], language='text')
+                    else:
+                        st.error(f"❌ Script not found: {script_path}")
+                        
+                except subprocess.TimeoutExpired:
+                    st.error("❌ Update timed out after 2 minutes")
+                except Exception as e:
+                    st.error(f"❌ Error: {str(e)[:50]}")
     
     with col3:
         if st.button("🔍 Check Now", use_container_width=True):
@@ -1840,7 +1874,6 @@ elif page == "📊 Historical Trends":
         
     else:
         st.warning("No historical data available.")
-
 # ==================== 3-DAY FORECAST PAGE (UPDATED WITH FRESHNESS) ====================
 elif page == "🔮 3-Day Forecast":
     st.markdown('<h1 class="main-header">🔮 3-Day AQI Forecast</h1>', unsafe_allow_html=True)
@@ -1858,7 +1891,7 @@ elif page == "🔮 3-Day Forecast":
     </div>
     """, unsafe_allow_html=True)
     
-    # Control buttons
+    # Control buttons - ACTUALLY WORKING
     col1, col2, col3 = st.columns([2, 1, 1])
     
     with col1:
@@ -1868,18 +1901,52 @@ elif page == "🔮 3-Day Forecast":
     with col2:
         if st.button("🔄 Update Now", use_container_width=True, type="primary"):
             with st.spinner("Generating fresh forecasts..."):
-                if trigger_prediction_update():
-                    st.success("Update triggered! Refreshing...")
-                    time.sleep(3)
-                    st.cache_data.clear()
-                    st.rerun()
-                else:
-                    st.error("Failed to trigger update")
+                try:
+                    # Get project root
+                    project_root = os.path.dirname(os.path.dirname(current_dir))
+                    script_path = os.path.join(project_root, "model_training", "run_quick_predictions.py")
+                    
+                    if os.path.exists(script_path):
+                        result = subprocess.run(
+                            [sys.executable, script_path],
+                            capture_output=True,
+                            text=True,
+                            cwd=project_root,
+                            timeout=120
+                        )
+                        
+                        if result.returncode == 0:
+                            st.success("✅ Predictions updated successfully!")
+                            # Show output snippet
+                            output_lines = result.stdout.strip().split('\n')
+                            if len(output_lines) > 5:
+                                with st.expander("📊 See output"):
+                                    st.code('\n'.join(output_lines[-10:]), language='text')
+                            time.sleep(3)
+                            st.cache_data.clear()
+                            st.rerun()
+                        else:
+                            st.error(f"❌ Update failed with code {result.returncode}")
+                            if result.stderr:
+                                st.code(result.stderr[:200], language='text')
+                    else:
+                        st.error(f"❌ Script not found: {script_path}")
+                        
+                except subprocess.TimeoutExpired:
+                    st.error("❌ Update timed out after 2 minutes")
+                except Exception as e:
+                    st.error(f"❌ Error: {str(e)[:100]}")
     
     with col3:
         if st.button("🔍 Refresh", use_container_width=True):
             st.cache_data.clear()
             st.rerun()
+    
+    # Load all types of forecasts
+    ml_forecast = load_ml_forecast()
+    ts_forecast = load_time_series_forecast()
+    ensemble_forecast = load_ensemble_forecast()
+    
     
     # Load all types of forecasts
     ml_forecast = load_ml_forecast()
@@ -2407,30 +2474,87 @@ elif page == "⚙️ System Status":
             st.warning("MongoDB URI not configured")
     except Exception as e:
         st.error(f"Database error: {str(e)[:50]}")
-    
-    # Manual Controls
+    # Manual Controls - ACTUALLY WORKING BUTTONS
     st.markdown("### 🎛️ Manual Controls")
     
     col1, col2, col3 = st.columns(3)
     
     with col1:
-        if st.button("📥 Collect New Data", use_container_width=True):
-            st.info("To collect data, run:\n```bash\npython data_pipeline/collect_historical.py --incremental\n```")
+        if st.button("📥 Collect New Data", use_container_width=True, type="secondary"):
+            with st.spinner("Collecting incremental data (last 6 hours)..."):
+                try:
+                    project_root = os.path.dirname(os.path.dirname(current_dir))
+                    script_path = os.path.join(project_root, "data_pipeline", "collect_historical.py")
+                    
+                    if os.path.exists(script_path):
+                        result = subprocess.run(
+                            [sys.executable, script_path, "--incremental", "--hours=6"],
+                            capture_output=True,
+                            text=True,
+                            cwd=project_root,
+                            timeout=300
+                        )
+                        
+                        if result.returncode == 0:
+                            st.success("✅ Data collection completed!")
+                            # Show last few lines of output
+                            output_lines = result.stdout.strip().split('\n')
+                            if len(output_lines) > 5:
+                                with st.expander("📊 See output"):
+                                    st.code('\n'.join(output_lines[-10:]), language='text')
+                            st.cache_data.clear()
+                        else:
+                            st.error(f"❌ Data collection failed")
+                            if result.stderr:
+                                st.code(result.stderr[:200], language='text')
+                    else:
+                        st.error(f"❌ Script not found: {script_path}")
+                        
+                except subprocess.TimeoutExpired:
+                    st.error("❌ Data collection timed out after 5 minutes")
+                except Exception as e:
+                    st.error(f"❌ Error: {str(e)[:100]}")
     
     with col2:
-        if st.button("🤖 Generate Predictions", use_container_width=True):
-            if trigger_prediction_update():
-                st.success("Prediction update triggered!")
-                time.sleep(2)
-                st.rerun()
-            else:
-                st.error("Failed to trigger update")
+        if st.button("🤖 Generate Predictions", use_container_width=True, type="secondary"):
+            with st.spinner("Generating 3-day predictions..."):
+                try:
+                    project_root = os.path.dirname(os.path.dirname(current_dir))
+                    script_path = os.path.join(project_root, "model_training", "run_quick_predictions.py")
+                    
+                    if os.path.exists(script_path):
+                        result = subprocess.run(
+                            [sys.executable, script_path],
+                            capture_output=True,
+                            text=True,
+                            cwd=project_root,
+                            timeout=180
+                        )
+                        
+                        if result.returncode == 0:
+                            st.success("✅ Predictions generated!")
+                            # Show output
+                            with st.expander("📊 See output"):
+                                st.code(result.stdout, language='text')
+                            time.sleep(3)
+                            st.cache_data.clear()
+                            st.rerun()
+                        else:
+                            st.error(f"❌ Generation failed")
+                            if result.stderr:
+                                st.code(result.stderr[:200], language='text')
+                    else:
+                        st.error(f"❌ Script not found: {script_path}")
+                            
+                except subprocess.TimeoutExpired:
+                    st.error("❌ Prediction generation timed out")
+                except Exception as e:
+                    st.error(f"❌ Error: {str(e)[:100]}")
     
     with col3:
-        if st.button("🔄 Refresh All", use_container_width=True):
+        if st.button("🔄 Refresh All", use_container_width=True, type="secondary"):
             st.cache_data.clear()
             st.rerun()
-
 # ==================== RUN THE APP ====================
 if __name__ == "__main__":
     # Add footer
