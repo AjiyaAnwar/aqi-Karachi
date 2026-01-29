@@ -795,7 +795,7 @@ if page == "🏠 Home":
         </div>
         """, unsafe_allow_html=True)
     
-        with col2:
+    with col2:
         if st.button("🔄 Update Now", use_container_width=True):
             with st.spinner("Updating predictions..."):
                 try:
