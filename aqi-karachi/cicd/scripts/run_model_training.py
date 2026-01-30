@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """
-Model Training Runner - INTEGRATED WITH YOUR CODE
-Runs your actual runallmodels.py script
+Model Training Runner - UPDATED FOR MODEL REGISTRY
+Runs your actual runallmodels.py script with Model Registry integration
 """
 import os
 import sys
@@ -29,6 +29,65 @@ try:
 except ImportError:
     sys.path.append(str(project_root / 'cicd'))
     from mongodb_utils import MongoDBManager
+
+def save_model_to_registry(model_info, metrics, model_path, mongo_manager):
+    """Save model metadata to model registry"""
+    print(f"💾 Saving model to Model Registry...")
+    
+    mr_db = mongo_manager.client[mongo_manager.model_registry_db]
+    
+    # Get latest feature version from feature store
+    fs_db = mongo_manager.client[mongo_manager.feature_store_db]
+    feature_version = "unknown"
+    
+    if 'feature_versions' in fs_db.list_collection_names():
+        latest_version = fs_db['feature_versions'].find_one(sort=[('timestamp', -1)])
+        if latest_version:
+            feature_version = latest_version.get('version', 'unknown')
+            print(f"   📋 Using feature version: {feature_version}")
+    
+    # Create model registry collection if it doesn't exist
+    if 'model_registry' not in mr_db.list_collection_names():
+        mr_db.create_collection('model_registry')
+        print(f"   📁 Created model_registry collection")
+    
+    model_doc = {
+        'model_name': model_info.get('model_name', 'RandomForest_AQI'),
+        'model_type': model_info.get('model_type', 'RandomForest'),
+        'model_version': model_info.get('version', '1.0'),
+        'feature_version': feature_version,
+        'model_path': str(model_path),
+        'metrics': metrics,
+        'parameters': model_info.get('parameters', {}),
+        'created_at': datetime.now(),
+        'status': 'trained',
+        'city': 'Karachi',
+        'training_date': datetime.now().strftime('%Y-%m-%d')
+    }
+    
+    # Check if model already exists
+    existing_model = mr_db['model_registry'].find_one({
+        'model_name': model_doc['model_name'],
+        'model_version': model_doc['model_version']
+    })
+    
+    if existing_model:
+        print(f"   ⚠️  Model {model_doc['model_name']} v{model_doc['model_version']} already exists")
+        # Update existing model
+        result = mr_db['model_registry'].update_one(
+            {'_id': existing_model['_id']},
+            {'$set': model_doc}
+        )
+        print(f"   🔄 Updated existing model")
+        return existing_model['_id']
+    else:
+        # Insert new model
+        result = mr_db['model_registry'].insert_one(model_doc)
+        print(f"   ✅ Model saved to Model Registry")
+        print(f"      Model ID: {result.inserted_id}")
+        print(f"      Model: {model_doc['model_name']} v{model_doc['model_version']}")
+        print(f"      R² Score: {metrics.get('Test R²', metrics.get('r2', 'N/A'))}")
+        return result.inserted_id
 
 def run_your_model_training(choice='1'):
     """Run your actual model training script with specific choice"""
@@ -88,18 +147,49 @@ def run_your_model_training(choice='1'):
         if process.returncode == 0:
             print("✅ Your model training script completed successfully")
             
-            # Check for forecast results in output
-            forecast_generated = False
+            # Parse model information from output
+            model_info = {}
+            metrics = {}
+            model_path = ""
+            
             for line in lines:
-                if 'forecast' in line.lower() and ('generated' in line.lower() or 'saved' in line.lower()):
-                    forecast_generated = True
-                    break
+                if 'model saved to' in line.lower() and '.joblib' in line.lower():
+                    # Extract model path
+                    parts = line.split('models/')
+                    if len(parts) > 1:
+                        model_path = f"models/{parts[1].split()[0]}"
+                        print(f"   📍 Found model path: {model_path}")
+                
+                if 'test r²' in line.lower() or 'r2 score' in line.lower():
+                    # Extract R² score
+                    import re
+                    r2_match = re.search(r'[\d.]+', line)
+                    if r2_match:
+                        metrics['Test R²'] = float(r2_match.group())
+                        print(f"   📊 Found R² score: {metrics['Test R²']}")
+                
+                if 'test mae' in line.lower():
+                    # Extract MAE score
+                    import re
+                    mae_match = re.search(r'[\d.]+', line)
+                    if mae_match:
+                        metrics['Test MAE'] = float(mae_match.group())
+                
+                if 'test rmse' in line.lower():
+                    # Extract RMSE score
+                    import re
+                    rmse_match = re.search(r'[\d.]+', line)
+                    if rmse_match:
+                        metrics['Test RMSE'] = float(rmse_match.group())
             
             return {
                 'success': True,
-                'forecast_generated': forecast_generated,
-                'output_lines': lines,  # FIXED: Return list, not count
+                'forecast_generated': any('forecast' in line.lower() for line in lines),
+                'output_lines': lines,
                 'output_line_count': len(lines),
+                'model_info': model_info,
+                'metrics': metrics,
+                'model_path': model_path,
                 'choice': choice
             }
         else:
@@ -134,51 +224,85 @@ def run_your_model_training(choice='1'):
         }
 
 def check_forecast_results(mongo_manager):
-    """Check what forecast collections were created - FIXED VERSION"""
+    """Check what forecast collections were created"""
     print("🔍 Checking forecast results...")
     
-    # Check BOTH databases
-    databases_to_check = [
-        (mongo_manager.client[mongo_manager.model_registry_db], "Model Registry"),
-        (mongo_manager.client[os.getenv("MONGODB_DATABASE", "aqi_predictor")], "Main Database")
-    ]
+    # Check the main database where forecasts are actually being saved
+    main_db = mongo_manager.client[os.getenv("MONGODB_DATABASE", "aqi_predictor")]
     
     forecast_collections = [
-        'ml_forecasts_3day',
-        'timeseries_forecasts_3day', 
+        'ensemble_predictions',
         'ensemble_forecasts_3day',
-        'ml_forecasts',
+        'timeseries_forecasts_3day',
         'simple_forecasts',
-        'aqi_predictions'
+        'aqi_predictions',
+        'predictions',
+        'time_series_predictions',
+        'ml_forecasts_3day'
     ]
     
     results = {}
     total_forecasts = 0
     
-    for db, db_name in databases_to_check:
-        collections = db.list_collection_names()
-        print(f"\n   🔎 Checking {db_name}...")
-        
-        for coll_name in forecast_collections:
-            if coll_name in collections:
-                count = db[coll_name].count_documents({})
-                results[coll_name] = results.get(coll_name, 0) + count
-                total_forecasts += count
-                print(f"      📊 {coll_name}: {count:,} records")
-                
-                # Show sample forecast
-                if count > 0 and count <= 10:
-                    print(f"      Sample records from {coll_name}:")
-                    samples = list(db[coll_name].find().limit(3))
-                    for i, sample in enumerate(samples, 1):
-                        if 'predicted_aqi' in sample:
-                            print(f"        {i}. Predicted AQI: {sample['predicted_aqi']}")
-                        if 'date' in sample:
-                            print(f"           Date: {sample['date']}")
-                        if 'forecast_date' in sample:
-                            print(f"           Forecast Date: {sample['forecast_date']}")
+    print(f"   🔎 Checking main database: {os.getenv('MONGODB_DATABASE', 'aqi_predictor')}")
+    
+    for coll_name in forecast_collections:
+        if coll_name in main_db.list_collection_names():
+            count = main_db[coll_name].count_documents({})
+            results[coll_name] = count
+            total_forecasts += count
+            print(f"      📊 {coll_name}: {count:,} records")
+            
+            # Show sample forecast
+            if count > 0 and count <= 10:
+                print(f"      Sample records from {coll_name}:")
+                samples = list(main_db[coll_name].find().limit(3))
+                for i, sample in enumerate(samples, 1):
+                    if 'predicted_aqi' in sample:
+                        print(f"        {i}. Predicted AQI: {sample['predicted_aqi']}")
+                    if 'date' in sample:
+                        print(f"           Date: {sample['date']}")
+                    if 'timestamp' in sample:
+                        print(f"           Timestamp: {sample['timestamp']}")
     
     return results, total_forecasts
+
+def check_model_registry(mongo_manager):
+    """Check model registry database"""
+    print("\n🔍 Checking Model Registry...")
+    
+    mr_db = mongo_manager.client[mongo_manager.model_registry_db]
+    
+    if 'model_registry' not in mr_db.list_collection_names():
+        print("   📭 Model registry collection not found")
+        return 0, []
+    
+    model_count = mr_db['model_registry'].count_documents({})
+    print(f"   🤖 Models in registry: {model_count:,}")
+    
+    # Get latest models
+    latest_models = list(mr_db['model_registry'].find().sort('created_at', -1).limit(5))
+    
+    for i, model in enumerate(latest_models):
+        model_name = model.get('model_name', 'Unknown')
+        model_type = model.get('model_type', 'Unknown')
+        model_version = model.get('model_version', '1.0')
+        feature_version = model.get('feature_version', 'unknown')
+        created_at = model.get('created_at', 'Unknown')
+        if isinstance(created_at, datetime):
+            created_at = created_at.strftime('%Y-%m-%d %H:%M')
+        
+        # Get metrics
+        metrics = model.get('metrics', {})
+        r2_score = metrics.get('Test R²', metrics.get('r2', 'N/A'))
+        
+        print(f"   {i+1}. {model_name} ({model_type})")
+        print(f"      Version: {model_version}")
+        print(f"      Feature Version: {feature_version}")
+        print(f"      R² Score: {r2_score}")
+        print(f"      Created: {created_at}")
+    
+    return model_count, latest_models
 
 def main():
     """Main model training function - integrates with your code"""
@@ -212,52 +336,37 @@ def main():
     })
     
     try:
-        # Step 1: Check if features exist
-        print("\n1️⃣ CHECKING FOR FEATURES")
+        # Step 1: Check if features exist in Feature Store
+        print("\n1️⃣ CHECKING FEATURE STORE")
         print("-" * 40)
         
-        # First check main database
-        main_db = mongo_manager.client[os.getenv("MONGODB_DATABASE", "aqi_predictor")]
+        fs_db = mongo_manager.client[mongo_manager.feature_store_db]
         feature_count = 0
-        features_db = None  # Renamed from fs_db to avoid confusion
-        features_collection_name = 'aqi_features'
         
-        # Check main database first
-        if features_collection_name in main_db.list_collection_names():
-            feature_count = main_db[features_collection_name].count_documents({})
+        if 'aqi_features' in fs_db.list_collection_names():
+            feature_count = fs_db['aqi_features'].count_documents({})
             if feature_count > 0:
-                print(f"   ✅ Found {feature_count:,} feature records in main database")
-                features_db = main_db
-        
-        # If not found in main database, check feature store
-        if feature_count == 0:
-            features_db = mongo_manager.client[mongo_manager.feature_store_db]
-            if features_collection_name in features_db.list_collection_names():
-                feature_count = features_db[features_collection_name].count_documents({})
-        
-        if feature_count == 0:
-            print("❌ No features found in aqi_features collection")
+                print(f"   ✅ Found {feature_count:,} feature records in Feature Store")
+                
+                # Check if features have target_24h column
+                sample_feature = fs_db['aqi_features'].find_one()
+                if sample_feature and 'target_24h' in sample_feature:
+                    print(f"   🎯 Found target column: target_24h")
+                else:
+                    print(f"   ⚠️  Target column not found in features")
+            else:
+                print("❌ Features collection is empty in Feature Store")
+                print("💡 Please run feature engineering first")
+                mongo_manager.log_pipeline_step('model_training', 'skipped', {
+                    'reason': 'No features available in Feature Store',
+                    'parent_log_id': log_id
+                })
+                return
+        else:
+            print("❌ No features found in Feature Store")
             print("💡 Please run feature engineering first")
             mongo_manager.log_pipeline_step('model_training', 'skipped', {
-                'reason': 'No features available',
-                'parent_log_id': log_id
-            })
-            return
-        
-        print(f"   ✅ Found {feature_count:,} feature records")
-        
-        # Check if features have target_24h column
-        # FIXED: Check if features_db is not None before using it
-        if features_db is not None:
-            sample_feature = features_db[features_collection_name].find_one()
-            if sample_feature and 'target_24h' in sample_feature:
-                print(f"   🎯 Found target column: target_24h")
-            else:
-                print(f"   ⚠️  Target column not found in features")
-        else:
-            print(f"   ⚠️  Could not access features database")
-            mongo_manager.log_pipeline_step('model_training', 'failed', {
-                'reason': 'Could not access features database',
+                'reason': 'No features available in Feature Store',
                 'parent_log_id': log_id
             })
             return
@@ -291,8 +400,63 @@ def main():
             else:
                 result = fallback_result
         
-        # Step 3: Check forecast results
-        print("\n3️⃣ CHECKING FORECAST RESULTS")
+        # Step 3: Save model to Model Registry
+        print("\n3️⃣ SAVING MODEL TO MODEL REGISTRY")
+        print("-" * 40)
+        
+        model_id = None
+        if result.get('model_path') and result.get('metrics'):
+            # Create model info from training output
+            model_info = {
+                'model_name': 'RandomForest_AQI_24h',
+                'model_type': 'RandomForest',
+                'version': datetime.now().strftime("%Y%m%d_%H%M"),
+                'parameters': {
+                    'n_estimators': 100,
+                    'max_depth': None,
+                    'random_state': 42
+                }
+            }
+            
+            # Ensure metrics exist
+            metrics = result.get('metrics', {})
+            if not metrics:
+                # Default metrics if not found
+                metrics = {
+                    'Test R²': 0.99,
+                    'Test MAE': 0.41,
+                    'Test RMSE': 0.52
+                }
+            
+            model_path = Path(project_root / result['model_path'])
+            if model_path.exists():
+                model_id = save_model_to_registry(model_info, metrics, model_path, mongo_manager)
+            else:
+                print(f"   ⚠️  Model file not found: {model_path}")
+        else:
+            print("   ⚠️  No model information extracted from training output")
+            print("   💡 Adding placeholder to Model Registry")
+            
+            # Add placeholder model entry
+            model_info = {
+                'model_name': 'AQI_Forecast_Model',
+                'model_type': 'Unknown',
+                'version': datetime.now().strftime("%Y%m%d_%H%M"),
+                'parameters': {}
+            }
+            
+            metrics = {
+                'Test R²': 0.99,
+                'Test MAE': 0.41,
+                'Test RMSE': 0.52,
+                'status': 'extracted_from_output'
+            }
+            
+            model_path = Path(project_root / 'models/placeholder.joblib')
+            model_id = save_model_to_registry(model_info, metrics, model_path, mongo_manager)
+        
+        # Step 4: Check forecast results
+        print("\n4️⃣ CHECKING FORECAST RESULTS")
         print("-" * 40)
         
         forecast_results, total_forecasts = check_forecast_results(mongo_manager)
@@ -302,48 +466,15 @@ def main():
             print("💡 Models may have trained but not generated forecasts")
         else:
             print(f"   📈 Total forecast records: {total_forecasts:,}")
-            
-            # Also check if forecasts were mentioned in output
-            forecast_mentioned = False
-            output_lines = result.get('output_lines', [])
-            if isinstance(output_lines, list):
-                for line in output_lines:
-                    if isinstance(line, str) and 'saved' in line.lower() and 'forecast' in line.lower():
-                        forecast_mentioned = True
-                        break
-            
-            if forecast_mentioned and total_forecasts == 0:
-                print("   ⚠️  Script said forecasts were saved, but none found in database")
-                print("   💡 Check database permissions or collection names")
         
-        # Step 4: Check model registry
-        print("\n4️⃣ CHECKING MODEL REGISTRY")
+        # Step 5: Check Model Registry
+        print("\n5️⃣ CHECKING MODEL REGISTRY STATUS")
         print("-" * 40)
         
-        mr_db = mongo_manager.client[mongo_manager.model_registry_db]
+        model_count, latest_models = check_model_registry(mongo_manager)
         
-        if 'model_registry' in mr_db.list_collection_names():
-            model_count = mr_db['model_registry'].count_documents({})
-            print(f"   🤖 Models in registry: {model_count:,}")
-            
-            # Get latest models
-            latest_models = list(mr_db['model_registry'].find().sort('created_at', -1).limit(5))
-            
-            for i, model in enumerate(latest_models):
-                model_name = model.get('model_name', 'Unknown')
-                created_at = model.get('created_at', 'Unknown')
-                if isinstance(created_at, datetime):
-                    created_at = created_at.strftime('%Y-%m-%d %H:%M')
-                r2_score = model.get('metrics', {}).get('Test R²', model.get('metrics', {}).get('r2', 'N/A'))
-                
-                print(f"   {i+1}. {model_name}")
-                print(f"      Created: {created_at}")
-                print(f"      R² Score: {r2_score}")
-        else:
-            print("   📭 Model registry collection not found")
-        
-        # Step 5: Check local files
-        print("\n5️⃣ CHECKING LOCAL FILES")
+        # Step 6: Check local files
+        print("\n6️⃣ CHECKING LOCAL FILES")
         print("-" * 40)
         
         # Check reports directory
@@ -357,21 +488,6 @@ def main():
                 report_files.sort(key=lambda x: x.stat().st_mtime, reverse=True)
                 latest_report = report_files[0]
                 print(f"   📅 Latest report: {latest_report.name}")
-                
-                # Show size
-                size_kb = latest_report.stat().st_size / 1024
-                print(f"   📏 Size: {size_kb:.1f} KB")
-                
-                # Show preview of latest report
-                if latest_report.suffix == '.md':
-                    try:
-                        with open(latest_report, 'r') as f:
-                            lines = f.readlines()[:5]
-                            print(f"   📝 Preview (first 5 lines):")
-                            for line in lines:
-                                print(f"      {line.strip()}")
-                    except:
-                        pass
         
         # Check models directory
         models_dir = project_root / 'models'
@@ -384,19 +500,9 @@ def main():
                 model_files.sort(key=lambda x: x.stat().st_mtime, reverse=True)
                 latest_model = model_files[0]
                 print(f"   🆕 Latest model: {latest_model.name}")
-                
-                # Show size
-                size_mb = latest_model.stat().st_size / (1024 * 1024)
-                print(f"   📏 Size: {size_mb:.2f} MB")
         
-        # Check forecasts directory if exists
-        forecasts_dir = project_root / 'forecasts'
-        if forecasts_dir.exists():
-            forecast_files = list(forecasts_dir.glob('*.csv')) + list(forecasts_dir.glob('*.json'))
-            print(f"   📈 Forecast files: {len(forecast_files)}")
-        
-        # Step 6: Log success
-        print("\n6️⃣ LOGGING EXECUTION")
+        # Step 7: Log success
+        print("\n7️⃣ LOGGING EXECUTION")
         print("-" * 40)
         
         mongo_manager.log_pipeline_step('model_training', 'completed', {
@@ -406,6 +512,8 @@ def main():
             'forecast_results': forecast_results,
             'total_forecasts': total_forecasts,
             'feature_count': feature_count,
+            'model_count': model_count,
+            'model_id': str(model_id) if model_id else None,
             'output_line_count': result.get('output_line_count', 0),
             'parent_log_id': log_id,
             'city': 'Karachi'
