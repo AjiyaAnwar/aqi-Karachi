@@ -1,6 +1,6 @@
 """
 Simplified feature engineering - step by step
-FIXED: Handles missing columns gracefully
+UPDATED: Saves to feature store database
 """
 import pandas as pd
 import numpy as np
@@ -12,14 +12,22 @@ from dotenv import load_dotenv
 load_dotenv()
 
 def create_features_simple():
-    """Simplified feature engineering pipeline - FIXED VERSION"""
+    """Simplified feature engineering pipeline - UPDATED FOR FEATURE STORE"""
     client = MongoClient(os.getenv('MONGODB_URI'))
-    db = client[os.getenv('MONGODB_DATABASE')]
     
-    print("Step 1: Fetching data...")
+    # Connect to feature store database
+    feature_store_db = os.getenv('FEATURE_STORE_DB', 'aqi_feature_store')
+    db = client[feature_store_db]
+    
+    print(f"📊 Connecting to Feature Store: {feature_store_db}")
+    
+    # Get raw data from main database
+    main_db = client[os.getenv('MONGODB_DATABASE', 'aqi_predictor')]
+    
+    print("Step 1: Fetching raw data from main database...")
     
     # First, check what columns exist in the collection
-    sample_record = db.aqi_measurements.find_one()
+    sample_record = main_db.aqi_measurements.find_one()
     if sample_record:
         print(f"Available columns: {list(sample_record.keys())}")
     
@@ -31,7 +39,7 @@ def create_features_simple():
     pm10_variations = ['pm10', 'pm10_concentration']
     
     # Check which columns actually exist
-    cursor = list(db.aqi_measurements.find({}).limit(1))
+    cursor = list(main_db.aqi_measurements.find({}).limit(1))
     if cursor:
         record = cursor[0]
         # Add existing columns to projection
@@ -48,7 +56,7 @@ def create_features_simple():
                 break
     
     # Get all data
-    cursor = list(db.aqi_measurements.find({}, projection).sort("timestamp", 1))
+    cursor = list(main_db.aqi_measurements.find({}, projection).sort("timestamp", 1))
     
     if not cursor:
         print("No data found")
@@ -226,7 +234,7 @@ def create_features_simple():
     print(f"Average AQI: {features['aqi'].mean():.1f}")
     print(f"Target range: {features['target_24h'].min():.1f} to {features['target_24h'].max():.1f}")
     
-    print("\nStep 9: Saving to MongoDB...")
+    print("\nStep 9: Saving to Feature Store...")
     features_collection = db['aqi_features']
     
     # Clear existing features
@@ -250,6 +258,8 @@ def create_features_simple():
     for record in records:
         record['created_at'] = datetime.now().isoformat()
         record['feature_version'] = '2.0'
+        record['source_database'] = os.getenv('MONGODB_DATABASE', 'aqi_predictor')
+        record['feature_store'] = feature_store_db
     
     # Insert in batches
     batch_size = 1000
@@ -261,7 +271,26 @@ def create_features_simple():
         total_inserted += len(result.inserted_ids)
         print(f"  Inserted batch {i//batch_size + 1}: {len(batch)} records")
     
-    print(f"💾 Saved {total_inserted} feature records to MongoDB")
+    print(f"💾 Saved {total_inserted} feature records to Feature Store")
+    
+    # Also create a feature version entry
+    version_collection = db['feature_versions']
+    version = datetime.now().strftime("%Y%m%d_%H%M")
+    
+    version_doc = {
+        'version': version,
+        'timestamp': datetime.now(),
+        'feature_count': len(features.columns),
+        'record_count': total_inserted,
+        'feature_names': list(features.columns),
+        'time_range': {
+            'start': features.index.min().isoformat(),
+            'end': features.index.max().isoformat()
+        }
+    }
+    
+    version_collection.insert_one(version_doc)
+    print(f"🏷️  Created feature version: {version}")
     
     # Save sample to CSV
     os.makedirs('data', exist_ok=True)
@@ -273,12 +302,12 @@ def create_features_simple():
     print("📁 Full dataset saved to data/features_full.csv")
     
     client.close()
-    print("\n🎉 Feature engineering complete!")
+    print("\n🎉 Feature engineering complete! Features saved to Feature Store.")
     
     return features
 
 if __name__ == "__main__":
     print("=" * 60)
-    print("🌫️ AQI Karachi - Feature Engineering")
+    print("🌫️ AQI Karachi - Feature Engineering (Feature Store)")
     print("=" * 60)
     create_features_simple()

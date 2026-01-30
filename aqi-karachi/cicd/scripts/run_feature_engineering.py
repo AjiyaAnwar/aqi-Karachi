@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 """
-Feature Engineering Runner - INTEGRATED WITH YOUR CODE
+Feature Engineering Runner - UPDATED FOR FEATURE STORE
 Runs your actual features.py script
 """
 import os
@@ -42,14 +42,6 @@ def get_raw_data_collection(db_manager):
             print(f"✅ Found {count:,} raw data records in main database")
             return main_db, count
     
-    # Then check in feature store database
-    feature_db = db_manager.client[db_manager.feature_store_db]
-    if 'aqi_measurements' in feature_db.list_collection_names():
-        count = feature_db['aqi_measurements'].count_documents({})
-        if count > 0:
-            print(f"✅ Found {count:,} raw data records in feature store database")
-            return feature_db, count
-    
     # Also check 'raw_data' collection (as found by EDA)
     if 'raw_data' in main_db.list_collection_names():
         count = main_db['raw_data'].count_documents({})
@@ -58,6 +50,26 @@ def get_raw_data_collection(db_manager):
             return main_db, count
     
     return None, 0
+
+def check_feature_store(db_manager):
+    """Check feature store database"""
+    fs_db = db_manager.client[db_manager.feature_store_db]
+    collections = fs_db.list_collection_names()
+    
+    print(f"\n🔍 Checking Feature Store: {db_manager.feature_store_db}")
+    
+    if 'aqi_features' in collections:
+        feature_count = fs_db['aqi_features'].count_documents({})
+        print(f"   ✅ Found {feature_count:,} feature records")
+        
+        if feature_count > 0:
+            sample = fs_db['aqi_features'].find_one()
+            print(f"   📋 Sample columns: {len(sample.keys())}")
+            return feature_count
+    else:
+        print("   📭 No features found in feature store")
+    
+    return 0
 
 def run_your_feature_engineering():
     """Run your actual feature engineering script"""
@@ -174,6 +186,7 @@ def main():
         print(f"✅ Connected to MongoDB")
         print(f"   Main DB: {os.getenv('MONGODB_DATABASE', 'aqi_predictor')}")
         print(f"   Feature Store: {mongo_manager.feature_store_db}")
+        print(f"   Model Registry: {mongo_manager.model_registry_db}")
     except Exception as e:
         print(f"❌ Failed to connect to MongoDB: {str(e)}")
         sys.exit(1)
@@ -203,8 +216,25 @@ def main():
         
         print(f"   ✅ Found {raw_count:,} raw data records")
         
-        # Step 2: Run YOUR feature engineering script
-        print("\n2️⃣ RUNNING FEATURE ENGINEERING SCRIPT")
+        # Step 2: Check feature store first
+        print("\n2️⃣ CHECKING FEATURE STORE")
+        print("-" * 40)
+        
+        existing_features = check_feature_store(mongo_manager)
+        
+        if existing_features > 100:
+            print(f"   ⚠️  Features already exist in feature store ({existing_features:,} records)")
+            print("   💡 Skipping feature engineering as features already exist")
+            
+            mongo_manager.log_pipeline_step('feature_engineering', 'skipped', {
+                'reason': 'Features already exist in feature store',
+                'existing_features': existing_features,
+                'parent_log_id': log_id
+            })
+            return
+        
+        # Step 3: Run YOUR feature engineering script
+        print("\n3️⃣ RUNNING FEATURE ENGINEERING SCRIPT")
         print("-" * 40)
         
         result = run_your_feature_engineering()
@@ -217,21 +247,21 @@ def main():
             })
             return
         
-        # Step 3: Get statistics from MongoDB
-        print("\n3️⃣ COLLECTING FEATURE STATISTICS")
+        # Step 4: Verify features in feature store
+        print("\n4️⃣ VERIFYING FEATURES IN FEATURE STORE")
         print("-" * 40)
         
-        # Check aqi_features collection in the main database
-        main_db = mongo_manager.client[os.getenv("MONGODB_DATABASE", "aqi_predictor")]
-        if 'aqi_features' not in main_db.list_collection_names():
-            print("⚠️  aqi_features collection not found in main database")
+        fs_db = mongo_manager.client[mongo_manager.feature_store_db]
+        
+        if 'aqi_features' not in fs_db.list_collection_names():
+            print("⚠️  aqi_features collection not found in feature store")
             features_count = 0
         else:
-            features_count = main_db['aqi_features'].count_documents({})
-            print(f"   💾 Feature records in main DB: {features_count:,}")
+            features_count = fs_db['aqi_features'].count_documents({})
+            print(f"   💾 Feature records in Feature Store: {features_count:,}")
             
             # Get sample feature
-            sample_feature = main_db['aqi_features'].find_one()
+            sample_feature = fs_db['aqi_features'].find_one()
             if sample_feature:
                 print(f"   📋 Sample feature columns: {len(sample_feature.keys())}")
                 
@@ -239,26 +269,26 @@ def main():
                 feature_names = list(sample_feature.keys())
                 if '_id' in feature_names:
                     feature_names.remove('_id')
+                if 'created_at' in feature_names:
+                    feature_names.remove('created_at')
+                if 'feature_version' in feature_names:
+                    feature_names.remove('feature_version')
                 
                 print(f"   🔤 Feature names (first 10): {', '.join(feature_names[:10])}")
                 if len(feature_names) > 10:
                     print(f"   ... and {len(feature_names) - 10} more features")
         
-        # Also check feature store database
-        fs_db = mongo_manager.client[mongo_manager.feature_store_db]
-        if 'aqi_features' in fs_db.list_collection_names():
-            fs_count = fs_db['aqi_features'].count_documents({})
-            print(f"   💾 Feature records in feature store: {fs_count:,}")
-            features_count = max(features_count, fs_count)
-        
-        # Step 4: Create version and log
-        print("\n4️⃣ CREATING FEATURE VERSION")
+        # Step 5: Create version and log
+        print("\n5️⃣ CREATING FEATURE VERSION")
         print("-" * 40)
         
         version = datetime.utcnow().strftime("%Y%m%d_%H%M")
         print(f"   🏷️  Feature version: {version}")
         
         # Store version in feature store database
+        if 'feature_versions' not in fs_db.list_collection_names():
+            fs_db.create_collection('feature_versions')
+        
         version_collection = fs_db['feature_versions']
         version_collection.insert_one({
             'version': version,
@@ -269,10 +299,10 @@ def main():
             'raw_data_records': raw_count
         })
         
-        print(f"   📅 Version stored: {version}")
+        print(f"   📅 Version stored in Feature Store: {version}")
         
-        # Step 5: Log success
-        print("\n5️⃣ LOGGING EXECUTION")
+        # Step 6: Log success
+        print("\n6️⃣ LOGGING EXECUTION")
         print("-" * 40)
         
         mongo_manager.log_pipeline_step('feature_engineering', 'completed', {
