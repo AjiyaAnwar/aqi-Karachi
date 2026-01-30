@@ -1,590 +1,490 @@
 """
-AQI Karachi - FIXED MODEL TRAINING (No ObjectId Error)
-Complete solution with proper data cleaning
+train_models.py - Train AQI models with recursive forecasting strategy
+Strategy: Train accurate 3h model → Use recursively for 72h forecast
 """
+
 import pandas as pd
 import numpy as np
 from pymongo import MongoClient
-from datetime import datetime, timedelta
+from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor
+from sklearn.preprocessing import StandardScaler
+from sklearn.metrics import r2_score, mean_absolute_error, mean_squared_error
+import joblib
 import os
-import pickle
-import json
+from datetime import datetime, timedelta
 from dotenv import load_dotenv
+import logging
 import warnings
 warnings.filterwarnings('ignore')
 
-# ML Libraries
-from sklearn.preprocessing import StandardScaler
-from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
+# Setup logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
-# Models
-from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor
-from sklearn.linear_model import Ridge, Lasso, LinearRegression
-from xgboost import XGBRegressor
-from lightgbm import LGBMRegressor
-
+# Load environment variables
 load_dotenv()
 
-def load_and_clean_data():
-    """Load and properly clean data from MongoDB"""
-    print("📥 Loading and cleaning data from MongoDB...")
-    
-    client = MongoClient(os.getenv('MONGODB_URI'))
-    db = client[os.getenv('MONGODB_DATABASE')]
-    
-    # Get all data - EXCLUDE _id field which is ObjectId
-    cursor = db.aqi_features.find({}, {'_id': 0})  # Exclude ObjectId
-    df = pd.DataFrame(list(cursor))
-    client.close()
-    
-    if df.empty:
-        print("❌ No data found!")
-        return None
-    
-    print(f"✅ Loaded {len(df)} records")
-    
-    # Convert timestamp to datetime
-    df['timestamp'] = pd.to_datetime(df['timestamp'], errors='coerce')
-    df = df.dropna(subset=['timestamp'])
-    df = df.sort_values('timestamp').reset_index(drop=True)
-    
-    # Ensure AQI column exists
-    if 'aqi' not in df.columns:
-        if 'us_aqi' in df.columns:
-            df['aqi'] = df['us_aqi']
-        else:
-            print("❌ No AQI column found!")
+class AQIModelTrainer:
+    def __init__(self):
+        """Initialize AQI Model Trainer with recursive forecasting"""
+        self.client = MongoClient(os.getenv('MONGODB_URI'))
+        self.fs_db = self.client['aqi_feature_store']
+        self.models = {}
+        self.scalers = {}
+        self.model_metrics = {}
+        
+    def load_training_data(self, feature_collection='aqi_features_simple'):
+        """
+        Load training data from feature store
+        
+        Args:
+            feature_collection: Name of feature collection
+        
+        Returns:
+            DataFrame with features and targets
+        """
+        logger.info(f"Loading data from {feature_collection}...")
+        
+        try:
+            # Load features
+            cursor = list(self.fs_db[feature_collection].find({}, {'_id': 0}))
+            
+            if not cursor:
+                logger.error(f"No data found in {feature_collection}")
+                return None
+            
+            df = pd.DataFrame(cursor)
+            
+            if 'timestamp' in df.columns:
+                df['timestamp'] = pd.to_datetime(df['timestamp'])
+                df.set_index('timestamp', inplace=True)
+                df = df.sort_index()
+            
+            logger.info(f"Loaded {len(df)} samples")
+            logger.info(f"Available targets: {[col for col in df.columns if 'target' in col]}")
+            
+            return df
+            
+        except Exception as e:
+            logger.error(f"Error loading data: {e}")
             return None
     
-    # Basic data cleaning
-    print("\n🧹 Data Cleaning:")
-    print(f"  Removing duplicates: {df.duplicated().sum()} rows")
-    df = df.drop_duplicates()
-    
-    # Remove outliers (AQI > 500 is impossible)
-    initial_len = len(df)
-    df = df[(df['aqi'] >= 0) & (df['aqi'] <= 500)]
-    removed_outliers = initial_len - len(df)
-    if removed_outliers > 0:
-        print(f"  Removed outliers: {removed_outliers} rows")
-    
-    print(f"  Final data size: {len(df)} rows")
-    print(f"📅 Date range: {df['timestamp'].min()} to {df['timestamp'].max()}")
-    print(f"📊 AQI stats - Min: {df['aqi'].min():.1f}, Max: {df['aqi'].max():.1f}, Mean: {df['aqi'].mean():.1f}, Std: {df['aqi'].std():.1f}")
-    
-    return df
-
-def create_smart_features(df, prediction_horizon=3):
-    """
-    Create intelligent features for time series prediction
-    Using 3-hour prediction (easier than 6 or 24)
-    """
-    print(f"\n🔧 Creating features for {prediction_horizon}-hour prediction...")
-    
-    # Make a copy
-    df = df.copy()
-    
-    # 1. TARGET VARIABLE - Predict future AQI
-    df['target'] = df['aqi'].shift(-prediction_horizon)
-    
-    # Remove rows without target
-    df = df.dropna(subset=['target'])
-    
-    # 2. BASIC TIME FEATURES
-    df['hour'] = df['timestamp'].dt.hour
-    df['day_of_week'] = df['timestamp'].dt.dayofweek
-    
-    # 3. LAG FEATURES (Most important!)
-    # Recent lags (1, 2, 3 hours)
-    for lag in [1, 2, 3]:
-        df[f'lag_{lag}h'] = df['aqi'].shift(lag)
-    
-    # Same time yesterday (24h ago)
-    df['lag_24h'] = df['aqi'].shift(24)
-    
-    # 4. ROLLING STATISTICS (Simple ones)
-    df['rolling_mean_3h'] = df['aqi'].rolling(window=3, min_periods=1).mean()
-    df['rolling_mean_6h'] = df['aqi'].rolling(window=6, min_periods=1).mean()
-    
-    # 5. TIME OF DAY FEATURES
-    df['is_morning_rush'] = ((df['hour'] >= 7) & (df['hour'] <= 10)).astype(int)
-    df['is_evening_rush'] = ((df['hour'] >= 16) & (df['hour'] <= 19)).astype(int)
-    df['is_night'] = ((df['hour'] >= 0) & (df['hour'] <= 5)).astype(int)
-    df['is_weekend'] = (df['day_of_week'] >= 5).astype(int)
-    
-    # 6. SIMPLE CYCLICAL ENCODING
-    df['hour_sin'] = np.sin(2 * np.pi * df['hour'] / 24)
-    df['hour_cos'] = np.cos(2 * np.pi * df['hour'] / 24)
-    
-    # 7. AQI TREND
-    df['trend_3h'] = df['aqi'].diff(3)  # Change over 3 hours
-    
-    # 8. If PM data exists, add simple PM features
-    if 'pm25' in df.columns:
-        df['pm25_lag_1h'] = df['pm25'].shift(1)
-        df['pm25_trend'] = df['pm25'].diff(1)
-    
-    if 'pm10' in df.columns:
-        df['pm10_lag_1h'] = df['pm10'].shift(1)
-    
-    # 9. Remove any remaining NaN
-    initial_len = len(df)
-    df = df.dropna()
-    removed = initial_len - len(df)
-    
-    print(f"✅ Removed {removed} rows with NaN, keeping {len(df)} rows")
-    print(f"📋 Features created: {len(df.columns) - 3}")  # minus timestamp, target, aqi
-    
-    return df
-
-def prepare_data_for_training(df):
-    """Prepare clean data for training"""
-    
-    print("\n📊 Preparing data for training...")
-    
-    # Sort by time
-    df = df.sort_values('timestamp').reset_index(drop=True)
-    
-    # Select features (all numeric columns except timestamp and target)
-    exclude_cols = ['timestamp', 'target', 'aqi']
-    feature_cols = [col for col in df.columns 
-                    if col not in exclude_cols 
-                    and pd.api.types.is_numeric_dtype(df[col])]
-    
-    print(f"Selected {len(feature_cols)} numeric features")
-    
-    # Ensure all features are numeric
-    for col in feature_cols:
-        df[col] = pd.to_numeric(df[col], errors='coerce')
-    
-    # Fill any NaN with column mean
-    df[feature_cols] = df[feature_cols].fillna(df[feature_cols].mean())
-    
-    # Time-based split (80/20)
-    split_idx = int(len(df) * 0.8)
-    
-    train = df.iloc[:split_idx]
-    test = df.iloc[split_idx:]
-    
-    X_train = train[feature_cols]
-    y_train = train['target']
-    X_test = test[feature_cols]
-    y_test = test['target']
-    
-    print(f"  Train: {len(X_train)} samples")
-    print(f"  Test:  {len(X_test)} samples")
-    print(f"  Features: {len(feature_cols)}")
-    
-    # Time validation
-    max_train_time = train['timestamp'].max()
-    min_test_time = test['timestamp'].min()
-    print(f"  Train period: {train['timestamp'].min().date()} to {max_train_time.date()}")
-    print(f"  Test period:  {min_test_time.date()} to {test['timestamp'].max().date()}")
-    
-    if min_test_time <= max_train_time:
-        print("⚠️ Warning: Time overlap detected!")
-    else:
-        print("✅ Clean time split")
-    
-    return X_train, X_test, y_train, y_test, feature_cols
-
-def train_simple_models(X_train, X_test, y_train, y_test, feature_cols):
-    """Train simple models that work"""
-    
-    print("\n🤖 Training Simple Models...")
-    
-    # Convert to numpy arrays to avoid any pandas issues
-    X_train_np = X_train.values.astype(np.float64)
-    X_test_np = X_test.values.astype(np.float64)
-    y_train_np = y_train.values.astype(np.float64)
-    y_test_np = y_test.values.astype(np.float64)
-    
-    # Scale features
-    scaler = StandardScaler()
-    X_train_scaled = scaler.fit_transform(X_train_np)
-    X_test_scaled = scaler.transform(X_test_np)
-    
-    # Simple model configurations
-    models = {
-        'Linear Regression': LinearRegression(),
-        'Ridge (alpha=1)': Ridge(alpha=1.0, random_state=42),
-        'Ridge (alpha=10)': Ridge(alpha=10.0, random_state=42),
-        'Lasso (alpha=0.1)': Lasso(alpha=0.1, random_state=42, max_iter=5000),
-        'Random Forest (simple)': RandomForestRegressor(
-            n_estimators=50,
-            max_depth=5,
-            random_state=42,
-            n_jobs=-1
-        ),
-        'XGBoost (simple)': XGBRegressor(
-            n_estimators=50,
-            max_depth=3,
-            learning_rate=0.1,
-            random_state=42,
-            n_jobs=-1,
-            verbosity=0
-        )
-    }
-    
-    results = []
-    trained_models = {}
-    
-    for name, model in models.items():
-        print(f"  🏃 Training {name}...")
+    def prepare_3h_model_data(self, df):
+        """
+        Prepare data specifically for 3h prediction model
+        """
+        logger.info("Preparing 3h model data...")
         
-        try:
-            # Train
-            model.fit(X_train_scaled, y_train_np)
-            
-            # Predict
-            y_pred_train = model.predict(X_train_scaled)
-            y_pred_test = model.predict(X_test_scaled)
-            
-            # Calculate metrics
-            train_r2 = r2_score(y_train_np, y_pred_train)
-            test_r2 = r2_score(y_test_np, y_pred_test)
-            test_mae = mean_absolute_error(y_test_np, y_pred_test)
-            test_rmse = np.sqrt(mean_squared_error(y_test_np, y_pred_test))
-            
-            # Store results
-            metrics = {
-                'Model': name,
-                'Train_R2': round(train_r2, 4),
-                'Test_R2': round(test_r2, 4),
-                'Test_MAE': round(test_mae, 2),
-                'Test_RMSE': round(test_rmse, 2)
-            }
-            
-            results.append(metrics)
-            trained_models[name] = (model, scaler, feature_cols)
-            
-            # Print with color coding
-            if test_r2 > 0:
-                print(f"    ✅ Test R²: {test_r2:.4f}, MAE: {test_mae:.2f}")
-            else:
-                print(f"    ⚠️ Test R²: {test_r2:.4f}, MAE: {test_mae:.2f}")
-            
-        except Exception as e:
-            print(f"    ❌ Failed: {str(e)[:50]}")
-            continue
+        # Basic features for 3h prediction
+        base_features = [
+            'aqi', 'hour', 'day_of_week', 'month',
+            'lag_1h', 'lag_3h', 'lag_6h', 'lag_24h',
+            'is_weekend', 'is_morning', 'is_afternoon', 
+            'is_evening', 'is_night'
+        ]
+        
+        # Only use features that exist in dataframe
+        available_features = [f for f in base_features if f in df.columns]
+        target_col = 'target_3h'
+        
+        if target_col not in df.columns:
+            logger.error(f"Target column {target_col} not found!")
+            return None, None, None
+        
+        X = df[available_features].copy()
+        y = df[target_col].copy()
+        
+        # Remove any rows with NaN
+        mask = ~(X.isna().any(axis=1) | y.isna())
+        X = X[mask]
+        y = y[mask]
+        
+        logger.info(f"3h Model: {len(X)} samples, {len(available_features)} features")
+        
+        return X, y, available_features
     
-    results_df = pd.DataFrame(results)
-    results_df = results_df.sort_values('Test_R2', ascending=False)
-    
-    return results_df, trained_models, (X_train_scaled, X_test_scaled, y_train_np, y_test_np)
-
-def analyze_results(results_df, trained_models, X_train_scaled, y_train):
-    """Analyze and visualize results"""
-    
-    print("\n" + "=" * 60)
-    print("📊 MODEL PERFORMANCE RESULTS")
-    print("=" * 60)
-    
-    # Display results
-    display_cols = ['Model', 'Test_R2', 'Test_MAE', 'Test_RMSE']
-    display_df = results_df[display_cols].copy()
-    
-    # Add color highlighting
-    def highlight_r2(val):
-        if val > 0.7:
-            return 'background-color: #d4edda'  # Green
-        elif val > 0:
-            return 'background-color: #fff3cd'  # Yellow
+    def train_3h_model(self, X, y, features, model_type='random_forest'):
+        """
+        Train model for 3-hour ahead prediction
+        """
+        logger.info(f"Training {model_type} model for 3h prediction...")
+        
+        # Time-based split (80-20)
+        split_idx = int(len(X) * 0.8)
+        
+        X_train = X.iloc[:split_idx]
+        X_test = X.iloc[split_idx:]
+        y_train = y.iloc[:split_idx]
+        y_test = y.iloc[split_idx:]
+        
+        logger.info(f"Train: {len(X_train)} samples ({X_train.index.min().date()} to {X_train.index.max().date()})")
+        logger.info(f"Test: {len(X_test)} samples ({X_test.index.min().date()} to {X_test.index.max().date()})")
+        
+        # Scale features
+        scaler = StandardScaler()
+        X_train_scaled = scaler.fit_transform(X_train)
+        X_test_scaled = scaler.transform(X_test)
+        
+        # Select model
+        if model_type == 'random_forest':
+            model = RandomForestRegressor(
+                n_estimators=200,
+                max_depth=15,
+                min_samples_split=5,
+                min_samples_leaf=2,
+                random_state=42,
+                n_jobs=-1
+            )
+        elif model_type == 'gradient_boosting':
+            model = GradientBoostingRegressor(
+                n_estimators=150,
+                learning_rate=0.1,
+                max_depth=5,
+                random_state=42
+            )
         else:
-            return 'background-color: #f8d7da'  # Red
-    
-    styled_df = display_df.style.applymap(highlight_r2, subset=['Test_R2'])
-    
-    print(display_df.to_string(index=False))
-    
-    # Analysis
-    best_r2 = results_df['Test_R2'].max()
-    worst_r2 = results_df['Test_R2'].min()
-    
-    print(f"\n📈 Best R²: {best_r2:.4f}")
-    print(f"📉 Worst R²: {worst_r2:.4f}")
-    
-    if best_r2 > 0:
-        best_model_name = results_df.iloc[0]['Model']
-        print(f"🏆 Best Model: {best_model_name}")
+            model = RandomForestRegressor(random_state=42)
         
-        # Feature importance for tree-based models
-        if best_model_name in ['Random Forest (simple)', 'XGBoost (simple)']:
-            print("\n🔍 Feature Importance Analysis:")
-            model, scaler, feature_cols = trained_models[best_model_name]
+        # Train
+        model.fit(X_train_scaled, y_train)
+        
+        # Predict
+        y_pred_train = model.predict(X_train_scaled)
+        y_pred_test = model.predict(X_test_scaled)
+        
+        # Metrics
+        metrics = {
+            'train_r2': r2_score(y_train, y_pred_train),
+            'test_r2': r2_score(y_test, y_pred_test),
+            'train_mae': mean_absolute_error(y_train, y_pred_train),
+            'test_mae': mean_absolute_error(y_test, y_pred_test),
+            'train_rmse': np.sqrt(mean_squared_error(y_train, y_pred_train)),
+            'test_rmse': np.sqrt(mean_squared_error(y_test, y_pred_test))
+        }
+        
+        logger.info(f"3h Model Performance:")
+        logger.info(f"  Test R²: {metrics['test_r2']:.4f}")
+        logger.info(f"  Test MAE: {metrics['test_mae']:.2f}")
+        logger.info(f"  Test RMSE: {metrics['test_rmse']:.2f}")
+        
+        return model, scaler, metrics, features
+    
+    def recursive_forecast(self, model, scaler, initial_features, steps=24):
+        """
+        Generate recursive forecast for 72h (24 steps of 3h)
+        
+        Args:
+            model: Trained 3h prediction model
+            scaler: Fitted scaler
+            initial_features: Dictionary of initial feature values
+            steps: Number of 3h steps to forecast (24 = 72h)
+        
+        Returns:
+            List of forecast values
+        """
+        logger.info(f"Generating recursive {steps*3}h forecast...")
+        
+        forecasts = []
+        current_features = initial_features.copy()
+        
+        for step in range(1, steps + 1):
+            # Prepare feature vector
+            feature_vector = []
             
-            if hasattr(model, 'feature_importances_'):
-                importances = model.feature_importances_
-                
-                # Create importance dataframe
-                importance_df = pd.DataFrame({
-                    'Feature': feature_cols,
-                    'Importance': importances
-                }).sort_values('Importance', ascending=False)
-                
-                print("Top 5 features:")
-                for idx, row in importance_df.head(5).iterrows():
-                    print(f"  {row['Feature']}: {row['Importance']:.4f}")
-                
-                # Save
-                os.makedirs('results', exist_ok=True)
-                importance_df.to_csv('results/feature_importance.csv', index=False)
-    else:
-        print("\n⚠️ ALL MODELS HAVE NEGATIVE R²")
-        print("Possible issues:")
-        print("1. Target variable has very low variance")
-        print("2. Features are not predictive")
-        print("3. Data leakage issue")
-    
-    return best_r2
-
-def generate_simple_forecast(trained_models, df, feature_cols, hours_ahead=24):
-    """Generate simple forecast"""
-    
-    print(f"\n🔮 Generating {hours_ahead}-hour forecast...")
-    
-    # Get best model
-    best_model_name = list(trained_models.keys())[0]
-    model, scaler, _ = trained_models[best_model_name]
-    
-    # Get latest data
-    latest = df.iloc[-1:].copy()
-    
-    forecasts = []
-    current_time = datetime.now()
-    
-    for i in range(1, hours_ahead + 1, 3):  # Forecast every 3 hours
-        forecast_time = current_time + timedelta(hours=i)
-        
-        # Prepare features for this forecast time
-        forecast_features = {}
-        
-        # Time features
-        forecast_features['hour'] = forecast_time.hour
-        forecast_features['day_of_week'] = forecast_time.weekday()
-        
-        # Time of day features
-        forecast_features['is_morning_rush'] = 1 if 7 <= forecast_time.hour <= 10 else 0
-        forecast_features['is_evening_rush'] = 1 if 16 <= forecast_time.hour <= 19 else 0
-        forecast_features['is_night'] = 1 if 0 <= forecast_time.hour <= 5 else 0
-        forecast_features['is_weekend'] = 1 if forecast_time.weekday() >= 5 else 0
-        
-        # Cyclical encoding
-        forecast_features['hour_sin'] = np.sin(2 * np.pi * forecast_time.hour / 24)
-        forecast_features['hour_cos'] = np.cos(2 * np.pi * forecast_time.hour / 24)
-        
-        # For lag features, use average of similar hours
-        similar_hours = df[df['hour'] == forecast_time.hour]
-        if len(similar_hours) > 0:
-            avg_aqi = similar_hours['aqi'].mean()
-        else:
-            avg_aqi = df['aqi'].mean()
-        
-        # Set lag features
-        forecast_features['lag_1h'] = avg_aqi
-        forecast_features['lag_2h'] = avg_aqi
-        forecast_features['lag_3h'] = avg_aqi
-        forecast_features['lag_24h'] = avg_aqi
-        
-        # Rolling stats
-        forecast_features['rolling_mean_3h'] = avg_aqi
-        forecast_features['rolling_mean_6h'] = avg_aqi
-        
-        # Other features (use averages)
-        for col in feature_cols:
-            if col not in forecast_features:
-                if col in df.columns:
-                    forecast_features[col] = df[col].mean()
+            for feature_name in self.current_feature_names:
+                if feature_name in current_features:
+                    feature_vector.append(current_features[feature_name])
                 else:
-                    forecast_features[col] = 0
-        
-        # Create feature array in correct order
-        feature_array = []
-        for col in feature_cols:
-            feature_array.append(forecast_features.get(col, 0))
-        
-        feature_array = np.array(feature_array).reshape(1, -1).astype(np.float64)
-        
-        # Scale and predict
-        features_scaled = scaler.transform(feature_array)
-        predicted_aqi = float(model.predict(features_scaled)[0])
-        
-        # Ensure realistic range
-        predicted_aqi = max(0, min(500, predicted_aqi))
-        
-        # AQI category
-        if predicted_aqi <= 50:
-            category = "Good"
-        elif predicted_aqi <= 100:
-            category = "Moderate"
-        elif predicted_aqi <= 150:
-            category = "Unhealthy for Sensitive"
-        elif predicted_aqi <= 200:
-            category = "Unhealthy"
-        else:
-            category = "Very Unhealthy"
-        
-        forecasts.append({
-            'timestamp': forecast_time,
-            'date': forecast_time.date(),
-            'hour': forecast_time.hour,
-            'predicted_aqi': round(predicted_aqi, 1),
-            'category': category
-        })
-    
-    forecast_df = pd.DataFrame(forecasts)
-    
-    print("\n📅 Forecast:")
-    for _, row in forecast_df.iterrows():
-        print(f"  {row['date']} {row['hour']:02d}:00 - AQI: {row['predicted_aqi']:.1f} ({row['category'][:15]})")
-    
-    # Save forecast
-    forecast_df.to_csv('results/forecast.csv', index=False)
-    print(f"💾 Forecast saved to 'results/forecast.csv'")
-    
-    return forecast_df
-
-def save_artifacts(trained_models, results_df, feature_cols):
-    """Save models and results"""
-    
-    print("\n💾 Saving artifacts...")
-    
-    os.makedirs('models', exist_ok=True)
-    os.makedirs('results', exist_ok=True)
-    
-    # Save results
-    results_df.to_csv('results/model_results.csv', index=False)
-    print("✅ Results saved to 'results/model_results.csv'")
-    
-    # Save best model
-    best_row = results_df.iloc[0]
-    best_model_name = best_row['Model']
-    
-    if best_model_name in trained_models:
-        model, scaler, _ = trained_models[best_model_name]
-        
-        model_id = f"aqi_best_{datetime.now().strftime('%Y%m%d_%H%M')}"
-        model_path = f'models/{model_id}.pkl'
-        
-        with open(model_path, 'wb') as f:
-            pickle.dump({
-                'model': model,
-                'scaler': scaler,
-                'features': feature_cols,
-                'metadata': {
-                    'model_id': model_id,
-                    'model_name': best_model_name,
-                    'test_r2': best_row['Test_R2'],
-                    'test_mae': best_row['Test_MAE'],
-                    'created_at': datetime.now()
-                }
-            }, f)
-        
-        print(f"✅ Best model saved to '{model_path}'")
-        
-        # Save to MongoDB
-        try:
-            client = MongoClient(os.getenv('MONGODB_URI'))
-            db = client[os.getenv('MONGODB_DATABASE')]
+                    # Use default/mean value
+                    feature_vector.append(0)
             
-            model_record = {
-                'model_id': model_id,
-                'model_name': best_model_name,
-                'model_type': 'ml',
-                'version': '1.0',
+            # Scale and predict
+            feature_array = np.array(feature_vector).reshape(1, -1)
+            feature_scaled = scaler.transform(feature_array)
+            predicted_aqi = model.predict(feature_scaled)[0]
+            
+            # Ensure realistic range
+            predicted_aqi = max(0, min(500, predicted_aqi))
+            
+            # Store forecast
+            forecast_time = datetime.now() + timedelta(hours=step*3)
+            forecasts.append({
+                'hours_ahead': step * 3,
+                'predicted_aqi': float(predicted_aqi),
+                'timestamp': forecast_time,
+                'date': forecast_time.strftime('%Y-%m-%d'),
+                'time': forecast_time.strftime('%H:%M'),
+                'step': step
+            })
+            
+            # Update features for next prediction
+            current_features['aqi'] = predicted_aqi
+            current_features['lag_1h'] = predicted_aqi if step == 1 else current_features.get('aqi', predicted_aqi)
+            
+            # Update time-based features
+            forecast_time_features = self._get_time_features(forecast_time)
+            current_features.update(forecast_time_features)
+            
+            # Update lag features
+            if step >= 8:  # After 24h (8 steps of 3h)
+                current_features['lag_24h'] = forecasts[step-8]['predicted_aqi']
+        
+        return forecasts
+    
+    def _get_time_features(self, dt):
+        """Get time-based features for a datetime"""
+        return {
+            'hour': dt.hour,
+            'day_of_week': dt.weekday(),
+            'month': dt.month,
+            'is_weekend': 1 if dt.weekday() >= 5 else 0,
+            'is_morning': 1 if 6 <= dt.hour <= 11 else 0,
+            'is_afternoon': 1 if 12 <= dt.hour <= 17 else 0,
+            'is_evening': 1 if 18 <= dt.hour <= 23 else 0,
+            'is_night': 1 if 0 <= dt.hour <= 5 else 0
+        }
+    
+    def save_models(self, model_3h, scaler_3h, features_3h, metrics_3h):
+        """
+        Save trained models to disk and database
+        """
+        logger.info("Saving models...")
+        
+        # Create directories
+        os.makedirs('models', exist_ok=True)
+        
+        # Save 3h model
+        model_3h_package = {
+            'model': model_3h,
+            'scaler': scaler_3h,
+            'features': features_3h,
+            'metrics': metrics_3h,
+            'horizon': '3h',
+            'created_at': datetime.now(),
+            'model_type': 'random_forest',
+            'purpose': 'direct_3h_prediction'
+        }
+        
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M')
+        model_3h_path = f'models/aqi_3h_model_{timestamp}.joblib'
+        joblib.dump(model_3h_package, model_3h_path)
+        
+        logger.info(f"3h model saved to: {model_3h_path}")
+        
+        # Save to Model Registry
+        self._save_to_registry(model_3h_package, '3h')
+        
+        return model_3h_path
+    
+    def _save_to_registry(self, model_package, horizon):
+        """Save model info to Model Registry"""
+        try:
+            registry_db = self.client['aqi_model_registry']
+            
+            if f'models_{horizon}' not in registry_db.list_collection_names():
+                registry_db.create_collection(f'models_{horizon}')
+            
+            model_doc = {
+                'model_name': f'AQI_{horizon}_RecursiveModel',
+                'model_type': model_package.get('model_type', 'random_forest'),
+                'horizon': horizon,
+                'metrics': model_package['metrics'],
+                'features': model_package['features'],
                 'created_at': datetime.now(),
-                'metrics': best_row.to_dict(),
-                'features_used': feature_cols,
-                'is_production': best_row['Test_R2'] > 0.5
+                'city': 'Karachi',
+                'status': 'trained',
+                'is_production': True,
+                'purpose': 'direct_prediction' if horizon == '3h' else 'recursive_forecast'
             }
             
-            db.model_registry.insert_one(model_record)
-            client.close()
-            
-            print("✅ Model saved to MongoDB")
+            result = registry_db[f'models_{horizon}'].insert_one(model_doc)
+            logger.info(f"Model saved to registry with ID: {result.inserted_id}")
             
         except Exception as e:
-            print(f"⚠️ Could not save to MongoDB: {e}")
+            logger.error(f"Error saving to registry: {e}")
     
-    return best_row['Test_R2']
+    def generate_72h_forecast(self, model_3h, scaler_3h, features_3h):
+        """
+        Generate 72h forecast using recursive 3h predictions
+        """
+        logger.info("Generating 72h forecast recursively...")
+        
+        # Get latest data point for initial features
+        cursor = list(self.fs_db['aqi_features_simple'].find(
+            {}, 
+            {'_id': 0}
+        ).sort('timestamp', -1).limit(1))
+        
+        if not cursor:
+            logger.error("No recent data found for forecast")
+            return []
+        
+        latest_data = cursor[0]
+        
+        # Prepare initial features
+        initial_features = {}
+        for feature in features_3h:
+            if feature in latest_data:
+                initial_features[feature] = latest_data[feature]
+            elif feature == 'hour':
+                initial_features[feature] = datetime.now().hour
+            elif feature == 'day_of_week':
+                initial_features[feature] = datetime.now().weekday()
+            elif feature == 'month':
+                initial_features[feature] = datetime.now().month
+            else:
+                initial_features[feature] = 0
+        
+        # Store feature names for recursive forecast
+        self.current_feature_names = features_3h
+        
+        # Generate recursive forecast (24 steps of 3h = 72h)
+        forecasts = self.recursive_forecast(
+            model=model_3h,
+            scaler=scaler_3h,
+            initial_features=initial_features,
+            steps=24
+        )
+        
+        # Save forecasts to database
+        self._save_forecasts_to_db(forecasts)
+        
+        logger.info(f"Generated {len(forecasts)} forecast points (72h)")
+        
+        return forecasts
+    
+    def _save_forecasts_to_db(self, forecasts):
+        """Save forecasts to MongoDB"""
+        try:
+            forecasts_db = self.client['aqi_predictor']
+            
+            # Clear old forecasts
+            forecasts_db.ml_recursive_forecasts.delete_many({})
+            
+            # Prepare documents
+            forecast_docs = []
+            for forecast in forecasts:
+                doc = {
+                    'hours_ahead': forecast['hours_ahead'],
+                    'predicted_aqi': forecast['predicted_aqi'],
+                    'timestamp': forecast['timestamp'],
+                    'date': forecast['date'],
+                    'time': forecast['time'],
+                    'created_at': datetime.now(),
+                    'model_type': '3h_recursive',
+                    'horizon': '72h',
+                    'city': 'Karachi',
+                    'forecast_type': 'recursive'
+                }
+                
+                # Add AQI category
+                aqi = forecast['predicted_aqi']
+                if aqi <= 50:
+                    doc['category'] = 'Good'
+                elif aqi <= 100:
+                    doc['category'] = 'Moderate'
+                elif aqi <= 150:
+                    doc['category'] = 'Unhealthy for Sensitive Groups'
+                elif aqi <= 200:
+                    doc['category'] = 'Unhealthy'
+                elif aqi <= 300:
+                    doc['category'] = 'Very Unhealthy'
+                else:
+                    doc['category'] = 'Hazardous'
+                
+                forecast_docs.append(doc)
+            
+            # Insert to database
+            if forecast_docs:
+                result = forecasts_db.ml_recursive_forecasts.insert_many(forecast_docs)
+                logger.info(f"Saved {len(result.inserted_ids)} forecasts to database")
+                
+        except Exception as e:
+            logger.error(f"Error saving forecasts: {e}")
+    
+    def run_training_pipeline(self):
+        """
+        Main training pipeline
+        """
+        logger.info("=" * 70)
+        logger.info("Starting AQI Model Training Pipeline")
+        logger.info("Strategy: Train 3h model → Recursive forecast for 72h")
+        logger.info("=" * 70)
+        
+        start_time = datetime.now()
+        
+        # 1. Load data
+        df = self.load_training_data()
+        if df is None:
+            logger.error("Failed to load data. Exiting.")
+            return False
+        
+        # 2. Prepare and train 3h model
+        X_3h, y_3h, features_3h = self.prepare_3h_model_data(df)
+        if X_3h is None:
+            logger.error("Failed to prepare 3h model data. Exiting.")
+            return False
+        
+        # 3. Train 3h model
+        model_3h, scaler_3h, metrics_3h, features_3h = self.train_3h_model(
+            X_3h, y_3h, features_3h, model_type='random_forest'
+        )
+        
+        # 4. Save models
+        model_path = self.save_models(
+            model_3h, scaler_3h, features_3h, metrics_3h
+        )
+        
+        # 5. Generate 72h recursive forecast
+        forecasts_72h = self.generate_72h_forecast(
+            model_3h, scaler_3h, features_3h
+        )
+        
+        # 6. Summary
+        elapsed = (datetime.now() - start_time).total_seconds()
+        
+        logger.info("\n" + "=" * 70)
+        logger.info("TRAINING COMPLETE!")
+        logger.info("=" * 70)
+        logger.info(f"3h Model Test R²: {metrics_3h['test_r2']:.4f}")
+        logger.info(f"Generated {len(forecasts_72h)} forecast points (72h)")
+        logger.info(f"Total time: {elapsed:.1f} seconds")
+        
+        if metrics_3h['test_r2'] > 0.5:
+            logger.info("🎉 Excellent! Your 3h model is accurate!")
+            logger.info("✅ 72h recursive forecasts generated successfully")
+        else:
+            logger.info("⚠️  3h model needs improvement")
+        
+        return True
 
 def main():
-    """Main training pipeline - SIMPLE AND ROBUST"""
+    """Main entry point"""
+    print("🌫️ AQI Karachi - Model Training with Recursive Forecasting")
+    print("=" * 70)
     
-    print("=" * 60)
-    print("🌫️ AQI KARACHI - SIMPLE MODEL TRAINING")
-    print("=" * 60)
-    print("Starting with basic models to ensure positive R²")
-    print("-" * 60)
+    trainer = AQIModelTrainer()
+    success = trainer.run_training_pipeline()
     
-    start_time = datetime.now()
-    
-    # 1. Load and clean data
-    df_raw = load_and_clean_data()
-    if df_raw is None or len(df_raw) < 50:
-        print("❌ Not enough data")
-        return
-    
-    # 2. Create simple features (3-hour prediction)
-    df_features = create_smart_features(df_raw, prediction_horizon=3)
-    
-    if df_features is None or len(df_features) < 40:
-        print("❌ Not enough data after feature creation")
-        return
-    
-    # 3. Prepare for training
-    X_train, X_test, y_train, y_test, feature_cols = prepare_data_for_training(df_features)
-    
-    print(f"\n📋 Features to use: {feature_cols}")
-    
-    # 4. Train simple models
-    results_df, trained_models, scaled_data = train_simple_models(
-        X_train, X_test, y_train, y_test, feature_cols
-    )
-    
-    # 5. Analyze results
-    best_r2 = analyze_results(results_df, trained_models, scaled_data[0], scaled_data[2])
-    
-    # 6. If we have positive R², generate forecast
-    if best_r2 > 0 and len(trained_models) > 0:
-        forecast_df = generate_simple_forecast(trained_models, df_features, feature_cols, hours_ahead=24)
-        
-        # 7. Save everything
-        final_r2 = save_artifacts(trained_models, results_df, feature_cols)
+    if success:
+        print("\n✅ Training successful! Next steps:")
+        print("   1. Check models/ directory for saved models")
+        print("   2. Check database for recursive forecasts")
+        print("   3. Update dashboard to show recursive forecasts")
+        print("\n🎯 Your dashboard will now show:")
+        print("   • Current AQI (real-time)")
+        print("   • 3h ML forecast (accurate)")
+        print("   • 72h recursive forecast (from 3h model)")
     else:
-        print("\n⚠️ Cannot generate forecast (negative R² or no trained models)")
-        
-        # Diagnostic
-        print("\n🔍 DIAGNOSTIC INFORMATION:")
-        print(f"Data size: {len(df_raw)}")
-        print(f"Features created: {len(feature_cols)}")
-        print(f"Target stats - Mean: {y_train.mean():.1f}, Std: {y_train.std():.1f}")
-        
-        if y_train.std() < 5:
-            print("⚠️ Target has very low variance - try predicting change instead of absolute value")
-            print("💡 Modify: Predict 'aqi_change_3h' instead of 'aqi'")
+        print("\n❌ Training failed. Check logs for details.")
     
-    # 8. Summary
-    elapsed = (datetime.now() - start_time).total_seconds()
-    
-    print("\n" + "=" * 60)
-    print("✅ TRAINING COMPLETE")
-    print("=" * 60)
-    print(f"⏱️  Time: {elapsed:.1f} seconds")
-    print(f"📊 Models trained: {len(trained_models)}")
-    
-    if best_r2 > 0:
-        print(f"🏆 Best R²: {best_r2:.4f}")
-        if best_r2 > 0.5:
-            print("🎉 Excellent performance!")
-        elif best_r2 > 0:
-            print("👍 Good start!")
-    else:
-        print("⚠️ Need to improve model performance")
-        print("\n💡 Next steps:")
-        print("1. Collect more data (run data collection)")
-        print("2. Try predicting AQI change instead of absolute AQI")
-        print("3. Check feature engineering")
+    print("\n" + "=" * 70)
 
 if __name__ == "__main__":
+    # Create directories
+    os.makedirs('models', exist_ok=True)
+    
     main()

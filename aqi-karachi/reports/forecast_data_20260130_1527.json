@@ -1,0 +1,73 @@
+{
+  "generated_at": "2026-01-30T15:27:54.279850",
+  "city": "Karachi",
+  "ml_forecasts": [
+    {
+      "date": "2026-01-30",
+      "predicted_aqi": 112.3,
+      "category": "Unhealthy for Sensitive",
+      "model": "ml",
+      "created_at": "2026-01-30 15:27:54.204392",
+      "_id": "697ccdfa6f19e68ec1423a9e"
+    },
+    {
+      "date": "2026-01-30",
+      "predicted_aqi": 112.9,
+      "category": "Unhealthy for Sensitive",
+      "model": "ml",
+      "created_at": "2026-01-30 15:27:54.204462",
+      "_id": "697ccdfa6f19e68ec1423a9f"
+    },
+    {
+      "date": "2026-01-30",
+      "predicted_aqi": 109.4,
+      "category": "Unhealthy for Sensitive",
+      "model": "ml",
+      "created_at": "2026-01-30 15:27:54.204516",
+      "_id": "697ccdfa6f19e68ec1423aa0"
+    },
+    {
+      "date": "2026-01-31",
+      "predicted_aqi": 111.6,
+      "category": "Unhealthy for Sensitive",
+      "model": "ml",
+      "created_at": "2026-01-30 15:27:54.204564",
+      "_id": "697ccdfa6f19e68ec1423aa1"
+    },
+    {
+      "date": "2026-01-31",
+      "predicted_aqi": 112.3,
+      "category": "Unhealthy for Sensitive",
+      "model": "ml",
+      "created_at": "2026-01-30 15:27:54.204609",
+      "_id": "697ccdfa6f19e68ec1423aa2"
+    },
+    {
+      "date": "2026-01-31",
+      "predicted_aqi": 109.6,
+      "category": "Unhealthy for Sensitive",
+      "model": "ml",
+      "created_at": "2026-01-30 15:27:54.204653",
+      "_id": "697ccdfa6f19e68ec1423aa3"
+    },
+    {
+      "date": "2026-01-31",
+      "predicted_aqi": 110.6,
+      "category": "Unhealthy for Sensitive",
+      "model": "ml",
+      "created_at": "2026-01-30 15:27:54.204696",
+      "_id": "697ccdfa6f19e68ec1423aa4"
+    },
+    {
+      "date": "2026-01-31",
+      "predicted_aqi": 113.5,
+      "category": "Unhealthy for Sensitive",
+      "model": "ml",
+      "created_at": "2026-01-30 15:27:54.204739",
+      "_id": "697ccdfa6f19e68ec1423aa5"
+    }
+  ],
+  "ts_forecasts": [],
+  "ensemble_forecasts": [],
+  "report_file": "reports/forecast_report_20260130_1527.md"
+}

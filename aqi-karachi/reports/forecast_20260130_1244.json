@@ -1,0 +1,102 @@
+{
+  "generated_at": "2026-01-30T12:44:31.723397",
+  "city": "Karachi",
+  "ml_metrics": {
+    "Test MAE": 21.926681415929206,
+    "Test RMSE": 26.540167045709403,
+    "Test R\u00b2": -3.803472189109497
+  },
+  "ml_forecasts": [
+    {
+      "date": "2026-01-31",
+      "predicted_aqi": 108.7,
+      "category": "Unhealthy for Sensitive Groups",
+      "model": "RandomForest",
+      "created_at": "2026-01-30T12:44:30.541780",
+      "forecast_type": "ml",
+      "_id": "697ca7afc9b20871dcd70276"
+    },
+    {
+      "date": "2026-02-01",
+      "predicted_aqi": 114.2,
+      "category": "Unhealthy for Sensitive Groups",
+      "model": "RandomForest",
+      "created_at": "2026-01-30T12:44:30.567586",
+      "forecast_type": "ml",
+      "_id": "697ca7afc9b20871dcd70277"
+    },
+    {
+      "date": "2026-02-02",
+      "predicted_aqi": 110.8,
+      "category": "Unhealthy for Sensitive Groups",
+      "model": "RandomForest",
+      "created_at": "2026-01-30T12:44:30.593513",
+      "forecast_type": "ml",
+      "_id": "697ca7afc9b20871dcd70278"
+    }
+  ],
+  "ts_forecasts": [
+    {
+      "date": "2026-01-31",
+      "predicted_aqi": 89.0,
+      "category": "Moderate",
+      "model": "TimeSeries",
+      "created_at": "2026-01-30T12:44:31.148155",
+      "forecast_type": "timeseries",
+      "_id": "697ca7afc9b20871dcd7027a"
+    },
+    {
+      "date": "2026-02-01",
+      "predicted_aqi": 88.9,
+      "category": "Moderate",
+      "model": "TimeSeries",
+      "created_at": "2026-01-30T12:44:31.148193",
+      "forecast_type": "timeseries",
+      "_id": "697ca7afc9b20871dcd7027b"
+    },
+    {
+      "date": "2026-02-02",
+      "predicted_aqi": 87.6,
+      "category": "Moderate",
+      "model": "TimeSeries",
+      "created_at": "2026-01-30T12:44:31.148212",
+      "forecast_type": "timeseries",
+      "_id": "697ca7afc9b20871dcd7027c"
+    }
+  ],
+  "ensemble_forecasts": [
+    {
+      "date": "2026-01-31",
+      "predicted_aqi": 102.8,
+      "category": "Unhealthy for Sensitive Groups",
+      "model": "Ensemble",
+      "ml_aqi": 108.7,
+      "ts_aqi": 89.0,
+      "created_at": "2026-01-30T12:44:31.148580",
+      "forecast_type": "ensemble",
+      "_id": "697ca7afc9b20871dcd7027e"
+    },
+    {
+      "date": "2026-02-01",
+      "predicted_aqi": 106.6,
+      "category": "Unhealthy for Sensitive Groups",
+      "model": "Ensemble",
+      "ml_aqi": 114.2,
+      "ts_aqi": 88.9,
+      "created_at": "2026-01-30T12:44:31.148586",
+      "forecast_type": "ensemble",
+      "_id": "697ca7afc9b20871dcd7027f"
+    },
+    {
+      "date": "2026-02-02",
+      "predicted_aqi": 103.8,
+      "category": "Unhealthy for Sensitive Groups",
+      "model": "Ensemble",
+      "ml_aqi": 110.8,
+      "ts_aqi": 87.6,
+      "created_at": "2026-01-30T12:44:31.148590",
+      "forecast_type": "ensemble",
+      "_id": "697ca7afc9b20871dcd70280"
+    }
+  ]
+}

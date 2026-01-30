@@ -20,6 +20,7 @@ class MongoDBManager:
             raise ValueError("MongoDB URI not provided and MONGODB_URI environment variable not set")
         
         # Get database names from environment with defaults
+        self.db_name = os.getenv("MONGODB_DATABASE", "aqi_predictor")  # ADDED THIS LINE
         self.feature_store_db = os.getenv("FEATURE_STORE_DB", "aqi_feature_store")
         self.model_registry_db = os.getenv("MODEL_REGISTRY_DB", "aqi_model_registry")
         self.pipeline_logs_db = os.getenv("LOGS_DB", "aqi_pipeline_logs")
@@ -40,6 +41,7 @@ class MongoDBManager:
         self.setup_indexes()
         
         print(f"✅ Connected to MongoDB")
+        print(f"   Main DB: {self.db_name}")  # UPDATED THIS LINE
         print(f"   Feature Store: {self.feature_store_db}")
         print(f"   Model Registry: {self.model_registry_db}")
         print(f"   Pipeline Logs: {self.pipeline_logs_db}")

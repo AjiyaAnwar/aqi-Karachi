@@ -91,3 +91,49 @@
 2026-01-30 12:18:12,324 - EDA_Analyzer - INFO - 📁 Results saved to: /workspaces/aqi-Karachi/aqi-karachi/results/eda_reports
 2026-01-30 12:18:12,324 - EDA_Analyzer - INFO - 📄 Insights report: /workspaces/aqi-Karachi/aqi-karachi/results/eda_reports/eda_insights_report.md
 2026-01-30 12:18:12,324 - EDA_Analyzer - INFO - ================================================================================
+2026-01-30 14:55:33,909 - EDA_Analyzer - INFO - ================================================================================
+2026-01-30 14:55:33,910 - EDA_Analyzer - INFO - 🎯 STARTING INTELLIGENT EDA ANALYSIS
+2026-01-30 14:55:33,910 - EDA_Analyzer - INFO - ================================================================================
+2026-01-30 14:55:33,910 - EDA_Analyzer - INFO - 🔍 Searching for data sources...
+2026-01-30 14:55:33,914 - EDA_Analyzer - INFO - 📁 Found 45 potential data sources
+2026-01-30 14:55:33,914 - EDA_Analyzer - INFO - 📊 Trying to load data from 45 sources...
+2026-01-30 14:55:33,968 - EDA_Analyzer - INFO -    Loaded 1128 rows, 31 columns
+2026-01-30 14:55:33,968 - EDA_Analyzer - INFO - ✅ Successfully loaded: /workspaces/aqi-Karachi/aqi-karachi/data/features_full.csv
+2026-01-30 14:55:33,969 - EDA_Analyzer - INFO -    Shape: (1128, 31), Columns: 31
+2026-01-30 14:55:33,969 - EDA_Analyzer - INFO - ✅ Successfully loaded dataset: 1128 records, 31 features
+2026-01-30 14:55:33,969 - EDA_Analyzer - INFO - 📐 Analyzing data structure...
+2026-01-30 14:55:34,008 - EDA_Analyzer - INFO - 🎨 Creating visual analytics...
+2026-01-30 14:55:44,917 - EDA_Analyzer - INFO - ✅ Interactive dashboard saved: /workspaces/aqi-Karachi/aqi-karachi/results/eda_reports/plots/interactive_dashboard.html
+2026-01-30 14:55:44,917 - EDA_Analyzer - INFO - ✅ Visual analytics saved to /workspaces/aqi-Karachi/aqi-karachi/results/eda_reports/plots
+2026-01-30 14:55:44,917 - EDA_Analyzer - INFO - 💡 Generating insights report...
+2026-01-30 14:55:44,919 - EDA_Analyzer - INFO - ✅ Insights report saved: /workspaces/aqi-Karachi/aqi-karachi/results/eda_reports/eda_insights_report.md
+2026-01-30 14:55:44,919 - EDA_Analyzer - INFO - ================================================================================
+2026-01-30 14:55:44,919 - EDA_Analyzer - INFO - ✅ EDA ANALYSIS COMPLETED SUCCESSFULLY!
+2026-01-30 14:55:44,919 - EDA_Analyzer - INFO - ================================================================================
+2026-01-30 14:55:44,919 - EDA_Analyzer - INFO - 📊 Data Analyzed: 1128 records, 31 features
+2026-01-30 14:55:44,919 - EDA_Analyzer - INFO - 📁 Results saved to: /workspaces/aqi-Karachi/aqi-karachi/results/eda_reports
+2026-01-30 14:55:44,919 - EDA_Analyzer - INFO - 📄 Insights report: /workspaces/aqi-Karachi/aqi-karachi/results/eda_reports/eda_insights_report.md
+2026-01-30 14:55:44,919 - EDA_Analyzer - INFO - ================================================================================
+2026-01-30 16:27:49,389 - EDA_Analyzer - INFO - ================================================================================
+2026-01-30 16:27:49,390 - EDA_Analyzer - INFO - 🎯 STARTING INTELLIGENT EDA ANALYSIS
+2026-01-30 16:27:49,390 - EDA_Analyzer - INFO - ================================================================================
+2026-01-30 16:27:49,390 - EDA_Analyzer - INFO - 🔍 Searching for data sources...
+2026-01-30 16:27:49,394 - EDA_Analyzer - INFO - 📁 Found 64 potential data sources
+2026-01-30 16:27:49,394 - EDA_Analyzer - INFO - 📊 Trying to load data from 64 sources...
+2026-01-30 16:27:49,554 - EDA_Analyzer - INFO -    Loaded 1080 rows, 67 columns
+2026-01-30 16:27:49,555 - EDA_Analyzer - INFO - ✅ Successfully loaded: /workspaces/aqi-Karachi/aqi-karachi/data/features_full.csv
+2026-01-30 16:27:49,555 - EDA_Analyzer - INFO -    Shape: (1080, 67), Columns: 67
+2026-01-30 16:27:49,555 - EDA_Analyzer - INFO - ✅ Successfully loaded dataset: 1080 records, 67 features
+2026-01-30 16:27:49,555 - EDA_Analyzer - INFO - 📐 Analyzing data structure...
+2026-01-30 16:27:49,628 - EDA_Analyzer - INFO - 🎨 Creating visual analytics...
+2026-01-30 16:27:56,491 - EDA_Analyzer - INFO - ✅ Interactive dashboard saved: /workspaces/aqi-Karachi/aqi-karachi/results/eda_reports/plots/interactive_dashboard.html
+2026-01-30 16:27:56,491 - EDA_Analyzer - INFO - ✅ Visual analytics saved to /workspaces/aqi-Karachi/aqi-karachi/results/eda_reports/plots
+2026-01-30 16:27:56,492 - EDA_Analyzer - INFO - 💡 Generating insights report...
+2026-01-30 16:27:56,493 - EDA_Analyzer - INFO - ✅ Insights report saved: /workspaces/aqi-Karachi/aqi-karachi/results/eda_reports/eda_insights_report.md
+2026-01-30 16:27:56,494 - EDA_Analyzer - INFO - ================================================================================
+2026-01-30 16:27:56,494 - EDA_Analyzer - INFO - ✅ EDA ANALYSIS COMPLETED SUCCESSFULLY!
+2026-01-30 16:27:56,494 - EDA_Analyzer - INFO - ================================================================================
+2026-01-30 16:27:56,494 - EDA_Analyzer - INFO - 📊 Data Analyzed: 1080 records, 67 features
+2026-01-30 16:27:56,494 - EDA_Analyzer - INFO - 📁 Results saved to: /workspaces/aqi-Karachi/aqi-karachi/results/eda_reports
+2026-01-30 16:27:56,494 - EDA_Analyzer - INFO - 📄 Insights report: /workspaces/aqi-Karachi/aqi-karachi/results/eda_reports/eda_insights_report.md
+2026-01-30 16:27:56,494 - EDA_Analyzer - INFO - ================================================================================

@@ -186,7 +186,7 @@ def collect_aqi_data(incremental=False, hours_back=6):
             batch = documents[i:i + batch_size]
             result = db.aqi_measurements.insert_many(batch)
             # Also update features collection
-            db.aqi_features.insert_many(batch)
+            
             total_inserted += len(result.inserted_ids)
             print(f"📦 Inserted batch {i//batch_size + 1}: {len(batch)} records")
         

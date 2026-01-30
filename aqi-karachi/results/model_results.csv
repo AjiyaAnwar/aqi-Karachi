@@ -1,7 +1,7 @@
 Model,Train_R2,Test_R2,Test_MAE,Test_RMSE
-Linear Regression,0.9774,0.8574,2.57,4.79
-Ridge (alpha=1),0.9758,0.8483,2.61,4.94
-Lasso (alpha=0.1),0.9743,0.8388,2.69,5.09
-Ridge (alpha=10),0.9736,0.835,2.76,5.15
-XGBoost (simple),0.9878,0.7901,4.38,5.81
-Random Forest (simple),0.983,0.788,4.49,5.84
+Lasso (alpha=0.1),0.7681,-0.5284,14.27,16.84
+Ridge (alpha=10),0.7527,-0.6263,15.16,17.37
+Linear Regression,0.7726,-0.7763,15.41,18.15
+Random Forest (simple),0.981,-3.0717,23.91,27.48
+Gradient Boosting,0.9974,-3.6935,25.86,29.5
+XGBoost,0.9963,-3.8769,25.76,30.07

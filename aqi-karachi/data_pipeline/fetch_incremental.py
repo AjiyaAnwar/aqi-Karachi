@@ -173,7 +173,7 @@ def fetch_incremental_data(hours_back=6):
         print(f"✅ Added {len(result.inserted_ids)} new records")
         
         # Also update features collection
-        features_result = db.aqi_features.insert_many(new_documents)
+        
         print(f"✅ Updated features collection with {len(features_result.inserted_ids)} records")
         
         # Calculate statistics
