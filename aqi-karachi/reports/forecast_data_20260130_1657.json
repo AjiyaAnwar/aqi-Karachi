@@ -1,0 +1,185 @@
+{
+  "generated_at": "2026-01-30T16:57:17.328783",
+  "city": "Karachi",
+  "model_strategy": "3h_recursive_72h",
+  "ml_forecasts": [
+    {
+      "date": "2026-01-30",
+      "timestamp": "2026-01-30 19:57:15.809000",
+      "predicted_aqi": 86.05403869741373,
+      "category": "Moderate",
+      "model": "3h_recursive",
+      "hours_ahead": 3,
+      "created_at": "2026-01-30 16:57:16.578000",
+      "source": "ml_recursive_forecasts",
+      "_id": "697ce2ed64038038c9d4e798"
+    },
+    {
+      "date": "2026-01-31",
+      "timestamp": "2026-01-31 01:57:15.875000",
+      "predicted_aqi": 91.24244047619045,
+      "category": "Moderate",
+      "model": "3h_recursive",
+      "hours_ahead": 9,
+      "created_at": "2026-01-30 16:57:16.578000",
+      "source": "ml_recursive_forecasts",
+      "_id": "697ce2ed64038038c9d4e799"
+    },
+    {
+      "date": "2026-02-01",
+      "timestamp": "2026-02-01 01:57:16.139000",
+      "predicted_aqi": 90.77392261904762,
+      "category": "Moderate",
+      "model": "3h_recursive",
+      "hours_ahead": 33,
+      "created_at": "2026-01-30 16:57:16.578000",
+      "source": "ml_recursive_forecasts",
+      "_id": "697ce2ed64038038c9d4e79a"
+    },
+    {
+      "date": "2026-02-02",
+      "timestamp": "2026-02-02 01:57:16.404000",
+      "predicted_aqi": 91.0162242063492,
+      "category": "Moderate",
+      "model": "3h_recursive",
+      "hours_ahead": 57,
+      "created_at": "2026-01-30 16:57:16.578000",
+      "source": "ml_recursive_forecasts",
+      "_id": "697ce2ed64038038c9d4e79b"
+    }
+  ],
+  "ts_forecasts": [
+    {
+      "date": "2026-01-31",
+      "predicted_aqi": 74.40059523809524,
+      "category": "Moderate",
+      "model": "timeseries",
+      "created_at": "2026-01-30 16:28:10.955000",
+      "_id": "697ce2ed64038038c9d4e79c"
+    },
+    {
+      "date": "2026-01-31",
+      "predicted_aqi": 80.35264285714285,
+      "category": "Moderate",
+      "model": "timeseries",
+      "created_at": "2026-01-30 16:28:10.955000",
+      "_id": "697ce2ed64038038c9d4e79d"
+    },
+    {
+      "date": "2026-01-31",
+      "predicted_aqi": 74.40059523809524,
+      "category": "Moderate",
+      "model": "timeseries",
+      "created_at": "2026-01-30 16:28:10.955000",
+      "_id": "697ce2ed64038038c9d4e79e"
+    },
+    {
+      "date": "2026-01-31",
+      "predicted_aqi": 74.40059523809524,
+      "category": "Moderate",
+      "model": "timeseries",
+      "created_at": "2026-01-30 16:28:10.955000",
+      "_id": "697ce2ed64038038c9d4e79f"
+    },
+    {
+      "date": "2026-01-31",
+      "predicted_aqi": 74.40059523809524,
+      "category": "Moderate",
+      "model": "timeseries",
+      "created_at": "2026-01-30 16:28:10.955000",
+      "_id": "697ce2ed64038038c9d4e7a0"
+    },
+    {
+      "date": "2026-01-31",
+      "predicted_aqi": 80.35264285714285,
+      "category": "Moderate",
+      "model": "timeseries",
+      "created_at": "2026-01-30 16:28:10.955000",
+      "_id": "697ce2ed64038038c9d4e7a1"
+    },
+    {
+      "date": "2026-01-31",
+      "predicted_aqi": 74.40059523809524,
+      "category": "Moderate",
+      "model": "timeseries",
+      "created_at": "2026-01-30 16:28:10.955000",
+      "_id": "697ce2ed64038038c9d4e7a2"
+    },
+    {
+      "date": "2026-01-31",
+      "predicted_aqi": 74.40059523809524,
+      "category": "Moderate",
+      "model": "timeseries",
+      "created_at": "2026-01-30 16:28:10.955000",
+      "_id": "697ce2ed64038038c9d4e7a3"
+    },
+    {
+      "date": "2026-01-31",
+      "predicted_aqi": 74.40059523809524,
+      "category": "Moderate",
+      "model": "timeseries",
+      "created_at": "2026-01-30 16:28:10.955000",
+      "_id": "697ce2ed64038038c9d4e7a4"
+    },
+    {
+      "date": "2026-01-31",
+      "predicted_aqi": 74.40059523809524,
+      "category": "Moderate",
+      "model": "timeseries",
+      "created_at": "2026-01-30 16:28:10.955000",
+      "_id": "697ce2ed64038038c9d4e7a5"
+    }
+  ],
+  "ensemble_forecasts": [
+    {
+      "date": "2026-01-30",
+      "predicted_aqi": 86.05403869741373,
+      "category": "Moderate",
+      "model": "ensemble",
+      "ml_aqi": 86.05403869741373,
+      "ts_aqi": "N/A",
+      "created_at": "2026-01-30 16:57:17.246332",
+      "weights": "ML:100% (TS unavailable)",
+      "_id": "697ce2ed64038038c9d4e7a6"
+    },
+    {
+      "date": "2026-01-31",
+      "predicted_aqi": 86.2,
+      "category": "Moderate",
+      "model": "ensemble",
+      "ml_aqi": 91.24244047619045,
+      "ts_aqi": 74.40059523809524,
+      "created_at": "2026-01-30 16:57:17.246351",
+      "weights": "ML:70%, TS:30%",
+      "_id": "697ce2ed64038038c9d4e7a7"
+    },
+    {
+      "date": "2026-02-01",
+      "predicted_aqi": 90.77392261904762,
+      "category": "Moderate",
+      "model": "ensemble",
+      "ml_aqi": 90.77392261904762,
+      "ts_aqi": "N/A",
+      "created_at": "2026-01-30 16:57:17.246356",
+      "weights": "ML:100% (TS unavailable)",
+      "_id": "697ce2ed64038038c9d4e7a8"
+    },
+    {
+      "date": "2026-02-02",
+      "predicted_aqi": 91.0162242063492,
+      "category": "Moderate",
+      "model": "ensemble",
+      "ml_aqi": 91.0162242063492,
+      "ts_aqi": "N/A",
+      "created_at": "2026-01-30 16:57:17.246360",
+      "weights": "ML:100% (TS unavailable)",
+      "_id": "697ce2ed64038038c9d4e7a9"
+    }
+  ],
+  "report_file": "reports/forecast_report_20260130_1657.md",
+  "statistics": {
+    "ml_count": 4,
+    "ts_count": 10,
+    "ensemble_count": 4
+  }
+}
