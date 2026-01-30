@@ -60,6 +60,7 @@ def run_your_model_training(choice='1'):
         print("-" * 40)
         
         # Print relevant output
+        lines = []
         if stdout:
             lines = stdout.strip().split('\n')
             
@@ -97,7 +98,8 @@ def run_your_model_training(choice='1'):
             return {
                 'success': True,
                 'forecast_generated': forecast_generated,
-                'output_lines': len(lines),
+                'output_lines': lines,  # FIXED: Return list, not count
+                'output_line_count': len(lines),
                 'choice': choice
             }
         else:
@@ -132,11 +134,14 @@ def run_your_model_training(choice='1'):
         }
 
 def check_forecast_results(mongo_manager):
-    """Check what forecast collections were created"""
+    """Check what forecast collections were created - FIXED VERSION"""
     print("🔍 Checking forecast results...")
     
-    db = mongo_manager.client[mongo_manager.model_registry_db]
-    collections = db.list_collection_names()
+    # Check BOTH databases
+    databases_to_check = [
+        (mongo_manager.client[mongo_manager.model_registry_db], "Model Registry"),
+        (mongo_manager.client[os.getenv("MONGODB_DATABASE", "aqi_predictor")], "Main Database")
+    ]
     
     forecast_collections = [
         'ml_forecasts_3day',
@@ -148,23 +153,32 @@ def check_forecast_results(mongo_manager):
     ]
     
     results = {}
+    total_forecasts = 0
     
-    for coll_name in forecast_collections:
-        if coll_name in collections:
-            count = db[coll_name].count_documents({})
-            results[coll_name] = count
-            print(f"   📊 {coll_name}: {count:,} records")
-            
-            # Show sample forecast
-            if count > 0:
-                sample = db[coll_name].find_one()
-                if sample:
-                    if 'predicted_aqi' in sample:
-                        print(f"     Sample AQI: {sample['predicted_aqi']}")
-                    if 'date' in sample:
-                        print(f"     Sample date: {sample['date']}")
+    for db, db_name in databases_to_check:
+        collections = db.list_collection_names()
+        print(f"\n   🔎 Checking {db_name}...")
+        
+        for coll_name in forecast_collections:
+            if coll_name in collections:
+                count = db[coll_name].count_documents({})
+                results[coll_name] = results.get(coll_name, 0) + count
+                total_forecasts += count
+                print(f"      📊 {coll_name}: {count:,} records")
+                
+                # Show sample forecast
+                if count > 0 and count <= 10:
+                    print(f"      Sample records from {coll_name}:")
+                    samples = list(db[coll_name].find().limit(3))
+                    for i, sample in enumerate(samples, 1):
+                        if 'predicted_aqi' in sample:
+                            print(f"        {i}. Predicted AQI: {sample['predicted_aqi']}")
+                        if 'date' in sample:
+                            print(f"           Date: {sample['date']}")
+                        if 'forecast_date' in sample:
+                            print(f"           Forecast Date: {sample['forecast_date']}")
     
-    return results
+    return results, total_forecasts
 
 def main():
     """Main model training function - integrates with your code"""
@@ -281,14 +295,26 @@ def main():
         print("\n3️⃣ CHECKING FORECAST RESULTS")
         print("-" * 40)
         
-        forecast_results = check_forecast_results(mongo_manager)
+        forecast_results, total_forecasts = check_forecast_results(mongo_manager)
         
         if not forecast_results:
             print("⚠️  No forecast collections found")
             print("💡 Models may have trained but not generated forecasts")
         else:
-            total_forecasts = sum(forecast_results.values())
             print(f"   📈 Total forecast records: {total_forecasts:,}")
+            
+            # Also check if forecasts were mentioned in output
+            forecast_mentioned = False
+            output_lines = result.get('output_lines', [])
+            if isinstance(output_lines, list):
+                for line in output_lines:
+                    if isinstance(line, str) and 'saved' in line.lower() and 'forecast' in line.lower():
+                        forecast_mentioned = True
+                        break
+            
+            if forecast_mentioned and total_forecasts == 0:
+                print("   ⚠️  Script said forecasts were saved, but none found in database")
+                print("   💡 Check database permissions or collection names")
         
         # Step 4: Check model registry
         print("\n4️⃣ CHECKING MODEL REGISTRY")
@@ -308,7 +334,7 @@ def main():
                 created_at = model.get('created_at', 'Unknown')
                 if isinstance(created_at, datetime):
                     created_at = created_at.strftime('%Y-%m-%d %H:%M')
-                r2_score = model.get('metrics', {}).get('Test R²', 'N/A')
+                r2_score = model.get('metrics', {}).get('Test R²', model.get('metrics', {}).get('r2', 'N/A'))
                 
                 print(f"   {i+1}. {model_name}")
                 print(f"      Created: {created_at}")
@@ -323,18 +349,51 @@ def main():
         # Check reports directory
         reports_dir = project_root / 'reports'
         if reports_dir.exists():
-            report_files = list(reports_dir.glob('*.md'))
+            report_files = list(reports_dir.glob('*.md')) + list(reports_dir.glob('*.json'))
             print(f"   📄 Report files: {len(report_files)}")
             
             if report_files:
-                latest_report = max(report_files, key=lambda x: x.stat().st_mtime)
+                # Sort by modification time
+                report_files.sort(key=lambda x: x.stat().st_mtime, reverse=True)
+                latest_report = report_files[0]
                 print(f"   📅 Latest report: {latest_report.name}")
+                
+                # Show size
+                size_kb = latest_report.stat().st_size / 1024
+                print(f"   📏 Size: {size_kb:.1f} KB")
+                
+                # Show preview of latest report
+                if latest_report.suffix == '.md':
+                    try:
+                        with open(latest_report, 'r') as f:
+                            lines = f.readlines()[:5]
+                            print(f"   📝 Preview (first 5 lines):")
+                            for line in lines:
+                                print(f"      {line.strip()}")
+                    except:
+                        pass
         
         # Check models directory
         models_dir = project_root / 'models'
         if models_dir.exists():
             model_files = list(models_dir.glob('*.joblib')) + list(models_dir.glob('*.pkl'))
             print(f"   🤖 Model files: {len(model_files)}")
+            
+            if model_files:
+                # Sort by modification time
+                model_files.sort(key=lambda x: x.stat().st_mtime, reverse=True)
+                latest_model = model_files[0]
+                print(f"   🆕 Latest model: {latest_model.name}")
+                
+                # Show size
+                size_mb = latest_model.stat().st_size / (1024 * 1024)
+                print(f"   📏 Size: {size_mb:.2f} MB")
+        
+        # Check forecasts directory if exists
+        forecasts_dir = project_root / 'forecasts'
+        if forecasts_dir.exists():
+            forecast_files = list(forecasts_dir.glob('*.csv')) + list(forecasts_dir.glob('*.json'))
+            print(f"   📈 Forecast files: {len(forecast_files)}")
         
         # Step 6: Log success
         print("\n6️⃣ LOGGING EXECUTION")
@@ -345,8 +404,9 @@ def main():
             'training_choice': result.get('choice', '1'),
             'forecast_generated': result.get('forecast_generated', False),
             'forecast_results': forecast_results,
+            'total_forecasts': total_forecasts,
             'feature_count': feature_count,
-            'output_lines': result.get('output_lines', 0),
+            'output_line_count': result.get('output_line_count', 0),
             'parent_log_id': log_id,
             'city': 'Karachi'
         })
