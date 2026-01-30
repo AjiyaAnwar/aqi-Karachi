@@ -52,8 +52,8 @@ def main():
     db = mongo_manager.client[mongo_manager.feature_store_db]
     
     # Check raw data
-    new_raw_data = db['raw_data'].count_documents({
-        'timestamp': {'$gte': cutoff_time}
+    new_raw_data = db['aqi_measurements'].count_documents({
+    'timestamp': {'$gte': cutoff_time}
     })
     
     # Check feature versions

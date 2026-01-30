@@ -1,29 +1,29 @@
 # 🎯 AQI Karachi - EDA Insights Report
 
-*Generated on: 2026-01-23 10:04:39*
+*Generated on: 2026-01-30 12:18:12*
 
 ## 📊 Executive Summary
 
-- **Total Records**: 1,080
+- **Total Records**: 1,128
 - **Total Features**: 31
-- **Time Period**: 44 days
-- **From**: 2025-12-09 00:00:00
-- **To**: 2026-01-22 23:00:00
+- **Time Period**: 46 days
+- **From**: 2025-12-14 00:00:00
+- **To**: 2026-01-29 23:00:00
 
 ## 📈 Key Findings
 
 ### AQI Analysis
 
-- **Average AQI**: 112.4
-- **Median AQI**: 112.0
-- **AQI Range**: 67.0 to 154.0
-- **Standard Deviation**: 25.2
+- **Average AQI**: 111.1
+- **Median AQI**: 110.0
+- **AQI Range**: 63.0 to 154.0
+- **Standard Deviation**: 25.7
 
 ### AQI Categories Distribution
 
-- **Moderate**: 38.33% of records
-- **Unhealthy for Sensitive**: 53.33% of records
-- **Unhealthy**: 8.33% of records
+- **Moderate**: 39.8% of records
+- **Unhealthy for Sensitive**: 52.22% of records
+- **Unhealthy**: 7.98% of records
 
 ### 📅 Temporal Insights
 

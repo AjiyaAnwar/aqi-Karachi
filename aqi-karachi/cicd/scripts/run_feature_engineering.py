@@ -30,6 +30,35 @@ except ImportError:
     sys.path.append(str(project_root / 'cicd'))
     from mongodb_utils import MongoDBManager
 
+# ==================== HELPER FUNCTIONS ====================
+def get_raw_data_collection(db_manager):
+    """Find raw data in MongoDB - checks both databases"""
+    
+    # First check in the main database
+    main_db = db_manager.client[os.getenv("MONGODB_DATABASE", "aqi_predictor")]
+    if 'aqi_measurements' in main_db.list_collection_names():
+        count = main_db['aqi_measurements'].count_documents({})
+        if count > 0:
+            print(f"✅ Found {count:,} raw data records in main database")
+            return main_db, count
+    
+    # Then check in feature store database
+    feature_db = db_manager.client[db_manager.feature_store_db]
+    if 'aqi_measurements' in feature_db.list_collection_names():
+        count = feature_db['aqi_measurements'].count_documents({})
+        if count > 0:
+            print(f"✅ Found {count:,} raw data records in feature store database")
+            return feature_db, count
+    
+    # Also check 'raw_data' collection (as found by EDA)
+    if 'raw_data' in main_db.list_collection_names():
+        count = main_db['raw_data'].count_documents({})
+        if count > 0:
+            print(f"✅ Found {count:,} raw data records in 'raw_data' collection")
+            return main_db, count
+    
+    return None, 0
+
 def run_your_feature_engineering():
     """Run your actual feature engineering script"""
     print("🔧 Running your feature engineering script...")
@@ -142,7 +171,9 @@ def main():
     # Initialize MongoDB manager
     try:
         mongo_manager = MongoDBManager(mongodb_uri)
-        print(f"✅ Connected to MongoDB: {mongo_manager.feature_store_db}")
+        print(f"✅ Connected to MongoDB")
+        print(f"   Main DB: {os.getenv('MONGODB_DATABASE', 'aqi_predictor')}")
+        print(f"   Feature Store: {mongo_manager.feature_store_db}")
     except Exception as e:
         print(f"❌ Failed to connect to MongoDB: {str(e)}")
         sys.exit(1)
@@ -159,23 +190,13 @@ def main():
         print("\n1️⃣ CHECKING FOR RAW DATA")
         print("-" * 40)
         
-        db = mongo_manager.client[mongo_manager.feature_store_db]
+        raw_db, raw_count = get_raw_data_collection(mongo_manager)
         
-        # Check aqi_measurements collection
-        if 'aqi_measurements' not in db.list_collection_names():
-            print("❌ No raw data found in aqi_measurements collection")
+        if raw_count == 0:
+            print("❌ No raw data found in any database")
             print("💡 Please run data collection first")
             mongo_manager.log_pipeline_step('feature_engineering', 'skipped', {
                 'reason': 'No raw data available',
-                'parent_log_id': log_id
-            })
-            return
-        
-        raw_count = db['aqi_measurements'].count_documents({})
-        if raw_count == 0:
-            print("❌ Raw data collection is empty")
-            mongo_manager.log_pipeline_step('feature_engineering', 'skipped', {
-                'reason': 'Raw data collection is empty',
                 'parent_log_id': log_id
             })
             return
@@ -200,16 +221,17 @@ def main():
         print("\n3️⃣ COLLECTING FEATURE STATISTICS")
         print("-" * 40)
         
-        # Check aqi_features collection
-        if 'aqi_features' not in db.list_collection_names():
-            print("⚠️  aqi_features collection not found")
+        # Check aqi_features collection in the main database
+        main_db = mongo_manager.client[os.getenv("MONGODB_DATABASE", "aqi_predictor")]
+        if 'aqi_features' not in main_db.list_collection_names():
+            print("⚠️  aqi_features collection not found in main database")
             features_count = 0
         else:
-            features_count = db['aqi_features'].count_documents({})
-            print(f"   💾 Feature records: {features_count:,}")
+            features_count = main_db['aqi_features'].count_documents({})
+            print(f"   💾 Feature records in main DB: {features_count:,}")
             
             # Get sample feature
-            sample_feature = db['aqi_features'].find_one()
+            sample_feature = main_db['aqi_features'].find_one()
             if sample_feature:
                 print(f"   📋 Sample feature columns: {len(sample_feature.keys())}")
                 
@@ -222,6 +244,13 @@ def main():
                 if len(feature_names) > 10:
                     print(f"   ... and {len(feature_names) - 10} more features")
         
+        # Also check feature store database
+        fs_db = mongo_manager.client[mongo_manager.feature_store_db]
+        if 'aqi_features' in fs_db.list_collection_names():
+            fs_count = fs_db['aqi_features'].count_documents({})
+            print(f"   💾 Feature records in feature store: {fs_count:,}")
+            features_count = max(features_count, fs_count)
+        
         # Step 4: Create version and log
         print("\n4️⃣ CREATING FEATURE VERSION")
         print("-" * 40)
@@ -229,8 +258,8 @@ def main():
         version = datetime.utcnow().strftime("%Y%m%d_%H%M")
         print(f"   🏷️  Feature version: {version}")
         
-        # Store version in MongoDB
-        version_collection = db['feature_versions']
+        # Store version in feature store database
+        version_collection = fs_db['feature_versions']
         version_collection.insert_one({
             'version': version,
             'timestamp': datetime.utcnow(),

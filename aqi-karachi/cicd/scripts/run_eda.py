@@ -30,6 +30,20 @@ except ImportError:
     sys.path.append(str(project_root / 'cicd'))
     from mongodb_utils import MongoDBManager
 
+# ==================== DATA CHECKING HELPER ====================
+def get_data_for_eda(db):
+    """Find data for EDA in any collection"""
+    collections = db.list_collection_names()
+    
+    # Check in order of preference
+    for collection in ['aqi_measurements', 'aqi_features', 'us_aqi', 'raw_data']:
+        if collection in collections:
+            count = db[collection].count_documents({})
+            if count > 10:  # Need at least some data
+                return collection, count
+    
+    return None, 0
+
 def run_your_eda():
     """Run your actual EDA script"""
     print("📊 Running your EDA script...")
@@ -202,18 +216,11 @@ def main():
         
         fs_db = mongo_manager.client[mongo_manager.feature_store_db]
         
-        # Check aqi_features collection (preferred)
-        if 'aqi_features' in fs_db.list_collection_names():
-            feature_count = fs_db['aqi_features'].count_documents({})
-            print(f"   ✅ Found {feature_count:,} feature records")
-            data_source = 'aqi_features'
+        # Use the get_data_for_eda function to find data
+        data_source, data_count = get_data_for_eda(fs_db)
         
-        # Fallback to aqi_measurements
-        elif 'aqi_measurements' in fs_db.list_collection_names():
-            measurement_count = fs_db['aqi_measurements'].count_documents({})
-            print(f"   ✅ Found {measurement_count:,} measurement records")
-            data_source = 'aqi_measurements'
-        
+        if data_source and data_count > 0:
+            print(f"   ✅ Found {data_count:,} records in '{data_source}' collection")
         else:
             print("❌ No data found for EDA")
             print("💡 Please run data collection first")
@@ -260,6 +267,7 @@ def main():
         eda_doc = {
             'timestamp': datetime.utcnow(),
             'data_source': data_source,
+            'data_count': data_count,
             'plots_generated': len(eda_results['plots']),
             'reports_generated': len(eda_results['reports']),
             'statistics_files': len(eda_results['statistics']),
@@ -278,6 +286,8 @@ def main():
         
         mongo_manager.log_pipeline_step('eda', 'completed', {
             'success': True,
+            'data_source': data_source,
+            'data_count': data_count,
             'insights_count': result.get('insights_count', 0),
             'plots_generated': len(eda_results['plots']),
             'reports_generated': len(eda_results['reports']),

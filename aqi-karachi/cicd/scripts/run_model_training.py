@@ -183,6 +183,7 @@ def main():
     try:
         mongo_manager = MongoDBManager(mongodb_uri)
         print(f"✅ Connected to MongoDB")
+        print(f"   Main DB: {os.getenv('MONGODB_DATABASE', 'aqi_predictor')}")
         print(f"   Feature Store: {mongo_manager.feature_store_db}")
         print(f"   Model Registry: {mongo_manager.model_registry_db}")
     except Exception as e:
@@ -201,10 +202,26 @@ def main():
         print("\n1️⃣ CHECKING FOR FEATURES")
         print("-" * 40)
         
-        fs_db = mongo_manager.client[mongo_manager.feature_store_db]
+        # First check main database
+        main_db = mongo_manager.client[os.getenv("MONGODB_DATABASE", "aqi_predictor")]
+        feature_count = 0
+        features_db = None  # Renamed from fs_db to avoid confusion
+        features_collection_name = 'aqi_features'
         
-        # Check aqi_features collection
-        if 'aqi_features' not in fs_db.list_collection_names():
+        # Check main database first
+        if features_collection_name in main_db.list_collection_names():
+            feature_count = main_db[features_collection_name].count_documents({})
+            if feature_count > 0:
+                print(f"   ✅ Found {feature_count:,} feature records in main database")
+                features_db = main_db
+        
+        # If not found in main database, check feature store
+        if feature_count == 0:
+            features_db = mongo_manager.client[mongo_manager.feature_store_db]
+            if features_collection_name in features_db.list_collection_names():
+                feature_count = features_db[features_collection_name].count_documents({})
+        
+        if feature_count == 0:
             print("❌ No features found in aqi_features collection")
             print("💡 Please run feature engineering first")
             mongo_manager.log_pipeline_step('model_training', 'skipped', {
@@ -213,23 +230,23 @@ def main():
             })
             return
         
-        feature_count = fs_db['aqi_features'].count_documents({})
-        if feature_count == 0:
-            print("❌ Features collection is empty")
-            mongo_manager.log_pipeline_step('model_training', 'skipped', {
-                'reason': 'Features collection is empty',
-                'parent_log_id': log_id
-            })
-            return
-        
         print(f"   ✅ Found {feature_count:,} feature records")
         
         # Check if features have target_24h column
-        sample_feature = fs_db['aqi_features'].find_one()
-        if sample_feature and 'target_24h' in sample_feature:
-            print(f"   🎯 Found target column: target_24h")
+        # FIXED: Check if features_db is not None before using it
+        if features_db is not None:
+            sample_feature = features_db[features_collection_name].find_one()
+            if sample_feature and 'target_24h' in sample_feature:
+                print(f"   🎯 Found target column: target_24h")
+            else:
+                print(f"   ⚠️  Target column not found in features")
         else:
-            print(f"   ⚠️  Target column not found in features")
+            print(f"   ⚠️  Could not access features database")
+            mongo_manager.log_pipeline_step('model_training', 'failed', {
+                'reason': 'Could not access features database',
+                'parent_log_id': log_id
+            })
+            return
         
         # Step 2: Run YOUR model training script
         print("\n2️⃣ RUNNING MODEL TRAINING SCRIPT")
@@ -289,6 +306,8 @@ def main():
             for i, model in enumerate(latest_models):
                 model_name = model.get('model_name', 'Unknown')
                 created_at = model.get('created_at', 'Unknown')
+                if isinstance(created_at, datetime):
+                    created_at = created_at.strftime('%Y-%m-%d %H:%M')
                 r2_score = model.get('metrics', {}).get('Test R²', 'N/A')
                 
                 print(f"   {i+1}. {model_name}")

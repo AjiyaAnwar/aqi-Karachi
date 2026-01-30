@@ -24,8 +24,41 @@ if os.path.exists(src_dir):
 
 load_dotenv()
 
+# ==================== PAGE CONFIGURATION (MUST BE FIRST) ====================
+st.set_page_config(
+    page_title="AQI Karachi - Air Quality Prediction",
+    page_icon="🌫️",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+
 # ==================== PREDICTION FRESHNESS FUNCTIONS ====================
 @st.cache_data(ttl=300)  # 5 minute cache
+def get_project_root():
+    """Get the correct project root path"""
+    current_file = os.path.abspath(__file__)
+    
+    # Try different approaches to find project root
+    possible_roots = [
+        os.path.dirname(os.path.dirname(current_file)),  # Go up one level from dashboard
+        os.path.dirname(os.path.dirname(os.path.dirname(current_file))),  # Go up two levels
+        os.path.join(os.path.dirname(current_file), '..', '..'),  # Alternative
+        os.getcwd(),  # Current working directory
+    ]
+    
+    for root in possible_roots:
+        # Check if model_training directory exists in this root
+        model_training_path = os.path.join(root, 'model_training')
+        if os.path.exists(model_training_path):
+            return root
+    
+    # Fallback to current file's grandparent
+    return os.path.dirname(os.path.dirname(current_file))
+
+# Get the correct project root
+PROJECT_ROOT = get_project_root()
+print(f"📁 PROJECT_ROOT determined as: {PROJECT_ROOT}")
+
 def check_prediction_freshness():
     """Check if predictions are fresh (<3 hours old)"""
     try:
@@ -73,33 +106,52 @@ def check_prediction_freshness():
         
     except Exception as e:
         return "error", f"Error: {str(e)[:50]}", None
+
 def trigger_prediction_update():
     """Actually run prediction update - returns success status"""
     try:
-        # Get project root
-        project_root = os.path.dirname(os.path.dirname(current_dir))
-        script_path = os.path.join(project_root, "model_training", "run_quick_predictions.py")
+        # Use the global PROJECT_ROOT
+        script_path = os.path.join(PROJECT_ROOT, "model_training", "run_quick_predictions.py")
+        
+        print(f"🔍 Looking for script at: {script_path}")
+        print(f"📁 Directory exists: {os.path.exists(os.path.dirname(script_path))}")
+        print(f"📄 File exists: {os.path.exists(script_path)}")
         
         if os.path.exists(script_path):
+            print(f"✅ Found script, running: {script_path}")
             result = subprocess.run(
                 [sys.executable, script_path],
                 capture_output=True,
                 text=True,
-                cwd=project_root,
+                cwd=PROJECT_ROOT,
                 timeout=120
             )
             
-            # Print output for debugging
-            print(f"Prediction update stdout: {result.stdout[:200]}")
+            print(f"📊 Script output: {result.stdout[:200]}...")
             if result.stderr:
-                print(f"Prediction update stderr: {result.stderr[:200]}")
+                print(f"⚠️ Script errors: {result.stderr[:200]}")
             
             return result.returncode == 0
         else:
-            print(f"Script not found: {script_path}")
+            # List what's actually in the directory
+            model_dir = os.path.join(PROJECT_ROOT, "model_training")
+            if os.path.exists(model_dir):
+                print(f"📄 Files in model_training/: {os.listdir(model_dir)}")
+            else:
+                print(f"❌ model_training directory not found at: {model_dir}")
+            
+            # Try to find the file anywhere
+            print("\n🔍 Searching for run_quick_predictions.py in project...")
+            for root, dirs, files in os.walk(PROJECT_ROOT):
+                if "run_quick_predictions.py" in files:
+                    print(f"✅ Found at: {os.path.join(root, 'run_quick_predictions.py')}")
+                    return False
+            
             return False
     except Exception as e:
-        print(f"Error in trigger_prediction_update: {e}")
+        print(f"❌ Error in trigger_prediction_update: {e}")
+        import traceback
+        traceback.print_exc()
         return False
 
 def get_freshness_icon(status):
@@ -132,15 +184,7 @@ def ensure_datetime(timestamp):
         except:
             return datetime.now()
 
-# Page configuration
-st.set_page_config(
-    page_title="AQI Karachi - Air Quality Prediction",
-    page_icon="🌫️",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
-
-# Custom CSS
+# ==================== CUSTOM CSS (AFTER PAGE CONFIG) ====================
 st.markdown("""
 <style>
     .main-header {
@@ -761,7 +805,7 @@ page = st.sidebar.radio(
 st.sidebar.markdown("---")
 
 # Update button in sidebar
-if st.sidebar.button("🔄 Update Predictions Now", use_container_width=True, type="secondary"):
+if st.sidebar.button("🔄 Update Predictions Now", use_container_width=True, type="secondary", key="sidebar_update"):
     with st.sidebar:
         with st.spinner("Updating predictions..."):
             if trigger_prediction_update():
@@ -772,7 +816,7 @@ if st.sidebar.button("🔄 Update Predictions Now", use_container_width=True, ty
                 st.error("Failed to trigger update")
 
 # Refresh all data button
-if st.sidebar.button("🗂️ Refresh All Data", use_container_width=True):
+if st.sidebar.button("🗂️ Refresh All Data", use_container_width=True, key="sidebar_refresh"):
     st.cache_data.clear()
     st.rerun()
 
@@ -795,8 +839,10 @@ if page == "🏠 Home":
         </div>
         """, unsafe_allow_html=True)
     
+
+    # In Home Page (around line 840)
     with col2:
-        if st.button("🔄 Update Now", use_container_width=True):
+        if st.button("🔄 Update Now", use_container_width=True, key="home_update"):
             with st.spinner("Updating predictions..."):
                 try:
                     # Get project root
@@ -832,10 +878,10 @@ if page == "🏠 Home":
                 except subprocess.TimeoutExpired:
                     st.error("❌ Update timed out after 2 minutes")
                 except Exception as e:
-                    st.error(f"❌ Error: {str(e)[:50]}")
-    
+                    st.error(f"❌ Error: {str(e)[:50]}")       
+
     with col3:
-        if st.button("🔍 Check Now", use_container_width=True):
+        if st.button("🔍 Check Now", use_container_width=True, key="home_check"):
             st.cache_data.clear()
             st.rerun()
     
@@ -1601,11 +1647,12 @@ elif page == "📈 EDA Analysis":
                         data=summary_text,
                         file_name=f"aqi_eda_summary_{datetime.now().strftime('%Y%m%d')}.txt",
                         mime="text/plain",
-                        use_container_width=True
+                        use_container_width=True,
+                        key="eda_download_report"
                     )
                 
                 with col2:
-                    if st.button("📊 Export Charts", use_container_width=True):
+                    if st.button("📊 Export Charts", use_container_width=True, key="eda_export_charts"):
                         st.info("Chart export feature coming soon!")
                         
             else:
@@ -1727,14 +1774,15 @@ elif page == "🎯 Feature Importance":
                 st.markdown(f"- {insight}")
             
             # Download feature importance
-            if st.button("📥 Download Feature Importance Data", use_container_width=True):
+            if st.button("📥 Download Feature Importance Data", use_container_width=True, key="feature_importance_download"):
                 csv = importance_data['data'].to_csv(index=False)
                 st.download_button(
                     label="⬇️ Download CSV",
                     data=csv,
                     file_name=f"feature_importance_{datetime.now().strftime('%Y%m%d')}.csv",
                     mime="text/csv",
-                    use_container_width=True
+                    use_container_width=True,
+                    key="feature_importance_csv"
                 )
         
         else:
@@ -1874,6 +1922,7 @@ elif page == "📊 Historical Trends":
         
     else:
         st.warning("No historical data available.")
+
 # ==================== 3-DAY FORECAST PAGE (UPDATED WITH FRESHNESS) ====================
 elif page == "🔮 3-Day Forecast":
     st.markdown('<h1 class="main-header">🔮 3-Day AQI Forecast</h1>', unsafe_allow_html=True)
@@ -1899,54 +1948,19 @@ elif page == "🔮 3-Day Forecast":
             st.warning("⚠️ Forecasts need updating for accurate predictions")
     
     with col2:
-        if st.button("🔄 Update Now", use_container_width=True, type="primary"):
+        if st.button("🔄 Update Now", use_container_width=True, type="primary", key="forecast_update"):
             with st.spinner("Generating fresh forecasts..."):
-                try:
-                    # Get project root
-                    project_root = os.path.dirname(os.path.dirname(current_dir))
-                    script_path = os.path.join(project_root, "model_training", "run_quick_predictions.py")
-                    
-                    if os.path.exists(script_path):
-                        result = subprocess.run(
-                            [sys.executable, script_path],
-                            capture_output=True,
-                            text=True,
-                            cwd=project_root,
-                            timeout=120
-                        )
-                        
-                        if result.returncode == 0:
-                            st.success("✅ Predictions updated successfully!")
-                            # Show output snippet
-                            output_lines = result.stdout.strip().split('\n')
-                            if len(output_lines) > 5:
-                                with st.expander("📊 See output"):
-                                    st.code('\n'.join(output_lines[-10:]), language='text')
-                            time.sleep(3)
-                            st.cache_data.clear()
-                            st.rerun()
-                        else:
-                            st.error(f"❌ Update failed with code {result.returncode}")
-                            if result.stderr:
-                                st.code(result.stderr[:200], language='text')
-                    else:
-                        st.error(f"❌ Script not found: {script_path}")
-                        
-                except subprocess.TimeoutExpired:
-                    st.error("❌ Update timed out after 2 minutes")
-                except Exception as e:
-                    st.error(f"❌ Error: {str(e)[:100]}")
-    
+                if trigger_prediction_update():
+                    st.success("✅ Predictions updated successfully! Refreshing...")
+                    time.sleep(2)
+                    st.cache_data.clear()
+                    st.rerun()
+                else:
+                    st.error("❌ Failed to update predictions. Check console for details.")
     with col3:
-        if st.button("🔍 Refresh", use_container_width=True):
+        if st.button("🔍 Refresh", use_container_width=True, key="forecast_refresh"):
             st.cache_data.clear()
             st.rerun()
-    
-    # Load all types of forecasts
-    ml_forecast = load_ml_forecast()
-    ts_forecast = load_time_series_forecast()
-    ensemble_forecast = load_ensemble_forecast()
-    
     
     # Load all types of forecasts
     ml_forecast = load_ml_forecast()
@@ -2384,20 +2398,31 @@ elif page == "⚙️ System Status":
     st.markdown("### ⚙️ Configuration")
     
     col1, col2 = st.columns(2)
-    
     with col1:
-        st.code("""
-        # .env Configuration
-        MONGODB_URI=*****
-        MONGODB_DATABASE=aqi_predictor
-        
-        # Data Collection
-        CITY=Karachi
-        LAT=24.8607
-        LON=67.0011
-        DAYS=45
-        """, language="bash")
-    
+        if st.button("📥 Collect New Data", use_container_width=True, type="secondary", key="system_collect_1"):
+            with st.spinner("Collecting incremental data..."):
+                try:
+                    script_path = os.path.join(PROJECT_ROOT, "data_pipeline", "collect_historical.py")
+                    
+                    if os.path.exists(script_path):
+                        result = subprocess.run(
+                            [sys.executable, script_path, "--incremental", "--hours=6"],
+                            capture_output=True,
+                            text=True,
+                            cwd=PROJECT_ROOT,
+                            timeout=300
+                        )
+                        
+                        if result.returncode == 0:
+                            st.success("✅ Data collection completed!")
+                            st.cache_data.clear()
+                        else:
+                            st.error(f"❌ Data collection failed")
+                    else:
+                        st.error(f"❌ Script not found: {script_path}")
+                        
+                except Exception as e:
+                    st.error(f"❌ Error: {str(e)[:100]}")
     with col2:
         st.info("""
         **Current Settings:**
@@ -2480,7 +2505,7 @@ elif page == "⚙️ System Status":
     col1, col2, col3 = st.columns(3)
     
     with col1:
-        if st.button("📥 Collect New Data", use_container_width=True, type="secondary"):
+        if st.button("📥 Collect New Data", use_container_width=True, type="secondary", key="system_collect_2"):
             with st.spinner("Collecting incremental data (last 6 hours)..."):
                 try:
                     project_root = os.path.dirname(os.path.dirname(current_dir))
@@ -2516,7 +2541,7 @@ elif page == "⚙️ System Status":
                     st.error(f"❌ Error: {str(e)[:100]}")
     
     with col2:
-        if st.button("🤖 Generate Predictions", use_container_width=True, type="secondary"):
+        if st.button("🤖 Generate Predictions", use_container_width=True, type="secondary", key="system_generate"):
             with st.spinner("Generating 3-day predictions..."):
                 try:
                     project_root = os.path.dirname(os.path.dirname(current_dir))
@@ -2552,9 +2577,10 @@ elif page == "⚙️ System Status":
                     st.error(f"❌ Error: {str(e)[:100]}")
     
     with col3:
-        if st.button("🔄 Refresh All", use_container_width=True, type="secondary"):
+        if st.button("🔄 Refresh All", use_container_width=True, type="secondary", key="system_refresh"):
             st.cache_data.clear()
             st.rerun()
+
 # ==================== RUN THE APP ====================
 if __name__ == "__main__":
     # Add footer
