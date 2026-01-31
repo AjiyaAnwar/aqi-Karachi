@@ -1,22 +1,19 @@
-name: ML Pipeline - OPTIMIZED
+name: AQI Karachi ML Pipeline - PRODUCTION FIXED
 
 on:
   schedule:
-    # Incremental data collection every 3 hours
+    # Data collection every 3 hours
     - cron: '0 */3 * * *'
     
-    # Feature engineering daily at 1 AM
+    # Feature engineering daily at 1 AM UTC
     - cron: '0 1 * * *'
     
-    # EDA daily at 2 AM
-    - cron: '0 2 * * *'
+    # Run YOUR combinedtraining.py twice daily (4 AM & 4 PM UTC)
+    - cron: '0 4 * * *'
+    - cron: '0 16 * * *'
     
-    # Model training + predictions twice daily (3 AM & 3 PM)
-    - cron: '0 3 * * *'
-    - cron: '0 15 * * *'
-    
-    # Full pipeline + prediction refresh every Sunday at 4 AM
-    - cron: '0 4 * * 0'
+    # Full pipeline every Sunday at 5 AM UTC
+    - cron: '0 5 * * 0'
     
   workflow_dispatch:
     inputs:
@@ -29,48 +26,34 @@ on:
           - data_incremental
           - data_full
           - features
-          - eda
-          - train
+          - train_combined  # CHANGED: This runs combinedtraining.py
           - predictions
           - full
-      force_run:
-        description: 'Force run even if not scheduled'
-        required: false
-        default: false
-        type: boolean
-  
+    
   push:
-    branches: [main, master]
+    branches: [main]
     paths:
       - 'data_pipeline/**'
       - 'model_training/**'
-      - 'cicd/**'
       - '.github/workflows/**'
       - 'requirements.txt'
 
 jobs:
   execute-pipeline:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 30
     environment: production
     
     env:
-      # MongoDB Configuration
       MONGODB_URI: ${{ secrets.MONGODB_URI }}
       MONGODB_DATABASE: aqi_predictor
+      MODEL_REGISTRY_DATABASE: aqi_model_registry
       
-      # City Configuration
       CITY_NAME: Karachi
       CITY_LAT: 24.8607
       CITY_LON: 67.0011
       TIMEZONE: Asia/Karachi
       
-      # Pipeline Configuration
-      HISTORICAL_DAYS: 45
-      TRAINING_THRESHOLD: 0.7
-      DATA_RETENTION_DAYS: 30
-      
-      # GitHub Actions Environment
       GITHUB_ACTIONS: true
     
     steps:
@@ -86,17 +69,28 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        if [ -f "requirements.txt" ]; then
-          pip install -r requirements.txt
-        fi
-        pip install pymongo python-dotenv schedule pymongo[srv]
+        pip install pymongo python-dotenv pandas numpy scikit-learn joblib
+        pip install streamlit plotly  # For dashboard compatibility
     
-    - name: Create required directories
+    - name: Test MongoDB connection
       run: |
-        mkdir -p logs
-        mkdir -p data
-        mkdir -p models
-        mkdir -p reports
+        echo "🔌 Testing MongoDB connection..."
+        python -c "
+        from pymongo import MongoClient
+        import os
+        uri = os.getenv('MONGODB_URI')
+        if uri:
+            try:
+                client = MongoClient(uri, serverSelectionTimeoutMS=5000)
+                client.server_info()
+                print('✅ MongoDB connection successful')
+            except Exception as e:
+                print(f'❌ MongoDB connection failed: {e}')
+                exit(1)
+        else:
+            print('❌ MONGODB_URI not set')
+            exit(1)
+        "
     
     - name: Determine pipeline step
       id: determine_step
@@ -104,21 +98,18 @@ jobs:
         echo "🔍 Determining pipeline step..."
         
         if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-          # Manual trigger
           STEP="${{ github.event.inputs.pipeline_step }}"
           echo "Manual trigger, step: $STEP"
           echo "step=$STEP" >> $GITHUB_OUTPUT
           
         elif [[ "${{ github.event_name }}" == "schedule" ]]; then
-          # Scheduled trigger
           HOUR=$(date -u +%H)
-          DAY=$(date -u +%u)  # 1=Monday, 7=Sunday
+          DAY=$(date -u +%u)
           
-          echo "Scheduled trigger, UTC Hour: $HOUR"
+          echo "Scheduled trigger, UTC Hour: $HOUR, Day: $DAY"
           
           case $HOUR in
             "00"|"03"|"06"|"09"|"12"|"15"|"18"|"21")
-              # Every 3 hours - incremental data
               echo "Running incremental data collection"
               echo "step=data_incremental" >> $GITHUB_OUTPUT
               ;;
@@ -126,15 +117,11 @@ jobs:
               echo "Running feature engineering"
               echo "step=features" >> $GITHUB_OUTPUT
               ;;
-            "02")
-              echo "Running EDA"
-              echo "step=eda" >> $GITHUB_OUTPUT
+            "04"|"16")
+              echo "Running combined training (YOUR SCRIPT)"
+              echo "step=train_combined" >> $GITHUB_OUTPUT
               ;;
-            "03")
-              echo "Running model training + predictions"
-              echo "step=train" >> $GITHUB_OUTPUT
-              ;;
-            "04")
+            "05")
               if [[ $DAY -eq 7 ]]; then
                 echo "Running full pipeline (Sunday)"
                 echo "step=full" >> $GITHUB_OUTPUT
@@ -143,18 +130,13 @@ jobs:
                 echo "step=skip" >> $GITHUB_OUTPUT
               fi
               ;;
-            "15")
-              echo "Running afternoon predictions update"
-              echo "step=predictions" >> $GITHUB_OUTPUT
-              ;;
             *)
-              echo "No scheduled task for this hour"
+              echo "No scheduled task"
               echo "step=skip" >> $GITHUB_OUTPUT
               ;;
           esac
           
         else
-          # Push event
           echo "Push event, running full pipeline"
           echo "step=full" >> $GITHUB_OUTPUT
         fi
@@ -166,58 +148,125 @@ jobs:
         STEP="${{ steps.determine_step.outputs.step }}"
         
         echo "🚀 Executing: $STEP"
-        echo "🕒 Current UTC: $(date -u '+%Y-%m-%d %H:%M:%S')"
+        echo "🕒 UTC: $(date -u '+%Y-%m-%d %H:%M:%S')"
+        echo "🕐 Karachi: $(TZ='Asia/Karachi' date '+%Y-%m-%d %H:%M:%S')"
         
         case $STEP in
           "data_incremental")
             echo "📥 Running incremental data collection..."
-            python data_pipeline/collect_historical.py --incremental --hours=6
+            if [ -f "data_pipeline/collect_historical.py" ]; then
+              python data_pipeline/collect_historical.py --incremental --hours=3
+            else
+              echo "❌ Script not found!"
+            fi
             ;;
+            
           "data_full")
             echo "📚 Running full data collection..."
-            python data_pipeline/collect_historical.py
+            if [ -f "data_pipeline/collect_historical.py" ]; then
+              python data_pipeline/collect_historical.py
+            else
+              echo "❌ Script not found!"
+            fi
             ;;
+            
           "features")
             echo "🔧 Running feature engineering..."
-            python data_pipeline/feature.py
+            if [ -f "data_pipeline/feature.py" ]; then
+              python data_pipeline/feature.py
+            else
+              echo "❌ Script not found!"
+            fi
             ;;
-          "eda")
-            echo "📊 Running EDA..."
-            python cicd/scripts/run_eda.py
+            
+          "train_combined")
+            echo "🤖 Running COMBINED training (your script)..."
+            if [ -f "model_training/combinedtraining.py" ]; then
+              python model_training/combinedtraining.py
+            else
+              echo "❌ combinedtraining.py not found!"
+            fi
             ;;
-          "train")
-            echo "🤖 Running model training..."
-            python model_training/combinedtraining.py
-            ;;
+            
           "predictions")
-            echo "🔮 Running prediction generation..."
-            python model_training/prediction_service.py
+            echo "🔮 Running prediction service..."
+            if [ -f "model_training/prediction_service.py" ]; then
+              python model_training/prediction_service.py
+            else
+              echo "❌ prediction_service.py not found!"
+            fi
             ;;
+            
           "full")
-            echo "🚀 Running full pipeline..."
+            echo "🚀 Running FULL PIPELINE..."
+            
             echo "1️⃣ Collecting data..."
-            python data_pipeline/collect_historical.py --incremental --hours=24
-            echo "2️⃣ Feature engineering..."
-            python data_pipeline/feature.py
-            echo "3️⃣ Training models..."
-            python model_training/combinedtraining.py
-            echo "4️⃣ Generating predictions..."
-            python model_training/prediction_service.py
+            if [ -f "data_pipeline/collect_historical.py" ]; then
+              python data_pipeline/collect_historical.py --incremental --hours=24
+            fi
+            
+            echo "2️⃣ Engineering features..."
+            if [ -f "data_pipeline/feature.py" ]; then
+              python data_pipeline/feature.py
+            fi
+            
+            echo "3️⃣ Running combined training..."
+            if [ -f "model_training/combinedtraining.py" ]; then
+              python model_training/combinedtraining.py
+            fi
+            
+            echo "✅ Full pipeline completed!"
             ;;
         esac
         
         echo "✅ Step $STEP completed"
     
-    - name: Upload artifacts
-      if: always()
-      uses: actions/upload-artifact@v4
-      with:
-        name: pipeline-output-${{ github.run_id }}
-        path: |
-          logs/
-          data/*.csv
-          reports/
-        retention-days: 7
+    - name: Verify pipeline output
+      if: steps.determine_step.outputs.step == 'train_combined' || steps.determine_step.outputs.step == 'full'
+      run: |
+        echo "🔍 Verifying pipeline output..."
+        python -c "
+        from pymongo import MongoClient
+        import os
+        from datetime import datetime
+        
+        client = MongoClient(os.getenv('MONGODB_URI'))
+        
+        # Check forecasts
+        aqi_db = client['aqi_predictor']
+        collections = aqi_db.list_collection_names()
+        print('📊 Available collections:', collections)
+        
+        # Check key collections
+        key_collections = ['ml_forecasts_3day', 'timeseries_forecasts_3day', 'ensemble_forecasts_3day']
+        for coll in key_collections:
+            if coll in collections:
+                count = aqi_db[coll].count_documents({})
+                print(f'✅ {coll}: {count} records')
+                
+                # Show latest forecast
+                latest = aqi_db[coll].find_one(sort=[('created_at', -1)])
+                if latest:
+                    print(f'   Latest: {latest.get(\"date\", \"N/A\")} - AQI {latest.get(\"predicted_aqi\", \"N/A\")}')
+            else:
+                print(f'⚠️  {coll}: NOT FOUND')
+        
+        # Check model registry
+        if 'aqi_model_registry' in client.list_database_names():
+            mr_db = client['aqi_model_registry']
+            models = mr_db.model_registry.count_documents({})
+            print(f'✅ Models in registry: {models}')
+        else:
+            print('⚠️  Model registry database not found')
+        
+        client.close()
+        
+        print('\\n🎯 Your dashboard expects data in:')
+        print('   - ml_forecasts_3day')
+        print('   - timeseries_forecasts_3day')
+        print('   - ensemble_forecasts_3day')
+        print('   - aqi_model_registry.model_registry')
+        "
     
     - name: Cleanup
       if: always()
@@ -233,4 +282,4 @@ jobs:
         echo "Run ID: ${{ github.run_id }}"
         echo "Step: ${{ steps.determine_step.outputs.step }}"
         echo "Status: ${{ job.status }}"
-        echo "Timestamp: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+        echo "Time: $(TZ='Asia/Karachi' date '+%Y-%m-%d %H:%M:%S %Z')"
