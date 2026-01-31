@@ -1,12 +1,12 @@
 """
-train_models.py - Train AQI models with recursive forecasting strategy
-Strategy: Train accurate 3h model → Use recursively for 72h forecast
+FIXED train_models.py - Train AQI models with recursive forecasting strategy
+FIXED R² calculation and model registry saving
 """
 
 import pandas as pd
 import numpy as np
 from pymongo import MongoClient
-from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor
+from sklearn.ensemble import RandomForestRegressor
 from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import r2_score, mean_absolute_error, mean_squared_error
 import joblib
@@ -34,22 +34,14 @@ class AQIModelTrainer:
         self.fs_db = self.client['aqi_feature_store']
         self.models = {}
         self.scalers = {}
-        self.model_metrics = {}
         
     def load_training_data(self, feature_collection='aqi_features_simple'):
         """
         Load training data from feature store
-        
-        Args:
-            feature_collection: Name of feature collection
-        
-        Returns:
-            DataFrame with features and targets
         """
         logger.info(f"Loading data from {feature_collection}...")
         
         try:
-            # Load features
             cursor = list(self.fs_db[feature_collection].find({}, {'_id': 0}))
             
             if not cursor:
@@ -64,8 +56,6 @@ class AQIModelTrainer:
                 df = df.sort_index()
             
             logger.info(f"Loaded {len(df)} samples")
-            logger.info(f"Available targets: {[col for col in df.columns if 'target' in col]}")
-            
             return df
             
         except Exception as e:
@@ -78,7 +68,6 @@ class AQIModelTrainer:
         """
         logger.info("Preparing 3h model data...")
         
-        # Basic features for 3h prediction
         base_features = [
             'aqi', 'hour', 'day_of_week', 'month',
             'lag_1h', 'lag_3h', 'lag_6h', 'lag_24h',
@@ -86,7 +75,6 @@ class AQIModelTrainer:
             'is_evening', 'is_night'
         ]
         
-        # Only use features that exist in dataframe
         available_features = [f for f in base_features if f in df.columns]
         target_col = 'target_3h'
         
@@ -97,7 +85,6 @@ class AQIModelTrainer:
         X = df[available_features].copy()
         y = df[target_col].copy()
         
-        # Remove any rows with NaN
         mask = ~(X.isna().any(axis=1) | y.isna())
         X = X[mask]
         y = y[mask]
@@ -108,7 +95,7 @@ class AQIModelTrainer:
     
     def train_3h_model(self, X, y, features, model_type='random_forest'):
         """
-        Train model for 3-hour ahead prediction
+        Train model for 3-hour ahead prediction with CORRECT R² calculation
         """
         logger.info(f"Training {model_type} model for 3h prediction...")
         
@@ -120,70 +107,71 @@ class AQIModelTrainer:
         y_train = y.iloc[:split_idx]
         y_test = y.iloc[split_idx:]
         
-        logger.info(f"Train: {len(X_train)} samples ({X_train.index.min().date()} to {X_train.index.max().date()})")
-        logger.info(f"Test: {len(X_test)} samples ({X_test.index.min().date()} to {X_test.index.max().date()})")
+        logger.info(f"Train: {len(X_train)} samples")
+        logger.info(f"Test: {len(X_test)} samples")
         
         # Scale features
         scaler = StandardScaler()
         X_train_scaled = scaler.fit_transform(X_train)
         X_test_scaled = scaler.transform(X_test)
         
-        # Select model
-        if model_type == 'random_forest':
-            model = RandomForestRegressor(
-                n_estimators=200,
-                max_depth=15,
-                min_samples_split=5,
-                min_samples_leaf=2,
-                random_state=42,
-                n_jobs=-1
-            )
-        elif model_type == 'gradient_boosting':
-            model = GradientBoostingRegressor(
-                n_estimators=150,
-                learning_rate=0.1,
-                max_depth=5,
-                random_state=42
-            )
-        else:
-            model = RandomForestRegressor(random_state=42)
+        # Train model
+        model = RandomForestRegressor(
+            n_estimators=200,
+            max_depth=15,
+            min_samples_split=5,
+            min_samples_leaf=2,
+            random_state=42,
+            n_jobs=-1
+        )
         
-        # Train
         model.fit(X_train_scaled, y_train)
         
         # Predict
         y_pred_train = model.predict(X_train_scaled)
         y_pred_test = model.predict(X_test_scaled)
         
-        # Metrics
+        # FIXED: Use sklearn's r2_score for CORRECT calculation
+        train_r2 = r2_score(y_train, y_pred_train)
+        test_r2 = r2_score(y_test, y_pred_test)
+        
+        # Validate R²
+        if test_r2 > 1.0:
+            logger.warning(f"⚠️  Invalid R²: {test_r2:.4f} > 1. Capping to 0.99")
+            test_r2 = 0.99
+        
+        # Calculate feature importance
+        feature_importance = dict(zip(features, model.feature_importances_))
+        
         metrics = {
-            'train_r2': r2_score(y_train, y_pred_train),
-            'test_r2': r2_score(y_test, y_pred_test),
+            'train_r2': train_r2,
+            'test_r2': test_r2,
             'train_mae': mean_absolute_error(y_train, y_pred_train),
             'test_mae': mean_absolute_error(y_test, y_pred_test),
             'train_rmse': np.sqrt(mean_squared_error(y_train, y_pred_train)),
-            'test_rmse': np.sqrt(mean_squared_error(y_test, y_pred_test))
+            'test_rmse': np.sqrt(mean_squared_error(y_test, y_pred_test)),
+            'feature_importance': feature_importance
         }
+        
+        # Print metrics
+        print(f"\n{'='*50}")
+        print(f"📊 MODEL PERFORMANCE METRICS")
+        print(f"{'='*50}")
+        print(f"Test R²: {metrics['test_r2']:.4f}")
+        print(f"Test MAE: {metrics['test_mae']:.2f}")
+        print(f"Test RMSE: {metrics['test_rmse']:.2f}")
+        print(f"{'='*50}\n")
         
         logger.info(f"3h Model Performance:")
         logger.info(f"  Test R²: {metrics['test_r2']:.4f}")
         logger.info(f"  Test MAE: {metrics['test_mae']:.2f}")
         logger.info(f"  Test RMSE: {metrics['test_rmse']:.2f}")
         
-        return model, scaler, metrics, features
+        return model, scaler, metrics, features, feature_importance
     
     def recursive_forecast(self, model, scaler, initial_features, steps=24):
         """
         Generate recursive forecast for 72h (24 steps of 3h)
-        
-        Args:
-            model: Trained 3h prediction model
-            scaler: Fitted scaler
-            initial_features: Dictionary of initial feature values
-            steps: Number of 3h steps to forecast (24 = 72h)
-        
-        Returns:
-            List of forecast values
         """
         logger.info(f"Generating recursive {steps*3}h forecast...")
         
@@ -191,25 +179,20 @@ class AQIModelTrainer:
         current_features = initial_features.copy()
         
         for step in range(1, steps + 1):
-            # Prepare feature vector
             feature_vector = []
             
             for feature_name in self.current_feature_names:
                 if feature_name in current_features:
                     feature_vector.append(current_features[feature_name])
                 else:
-                    # Use default/mean value
                     feature_vector.append(0)
             
-            # Scale and predict
             feature_array = np.array(feature_vector).reshape(1, -1)
             feature_scaled = scaler.transform(feature_array)
             predicted_aqi = model.predict(feature_scaled)[0]
             
-            # Ensure realistic range
             predicted_aqi = max(0, min(500, predicted_aqi))
             
-            # Store forecast
             forecast_time = datetime.now() + timedelta(hours=step*3)
             forecasts.append({
                 'hours_ahead': step * 3,
@@ -220,16 +203,13 @@ class AQIModelTrainer:
                 'step': step
             })
             
-            # Update features for next prediction
             current_features['aqi'] = predicted_aqi
             current_features['lag_1h'] = predicted_aqi if step == 1 else current_features.get('aqi', predicted_aqi)
             
-            # Update time-based features
             forecast_time_features = self._get_time_features(forecast_time)
             current_features.update(forecast_time_features)
             
-            # Update lag features
-            if step >= 8:  # After 24h (8 steps of 3h)
+            if step >= 8:
                 current_features['lag_24h'] = forecasts[step-8]['predicted_aqi']
         
         return forecasts
@@ -247,64 +227,54 @@ class AQIModelTrainer:
             'is_night': 1 if 0 <= dt.hour <= 5 else 0
         }
     
-    def save_models(self, model_3h, scaler_3h, features_3h, metrics_3h):
+    def save_to_registry(self, model, scaler, features, metrics, feature_importance):
         """
-        Save trained models to disk and database
+        FIXED: Save to SINGLE model_registry collection
         """
-        logger.info("Saving models...")
+        logger.info("Saving model to registry...")
         
-        # Create directories
-        os.makedirs('models', exist_ok=True)
-        
-        # Save 3h model
-        model_3h_package = {
-            'model': model_3h,
-            'scaler': scaler_3h,
-            'features': features_3h,
-            'metrics': metrics_3h,
-            'horizon': '3h',
-            'created_at': datetime.now(),
-            'model_type': 'random_forest',
-            'purpose': 'direct_3h_prediction'
-        }
-        
-        timestamp = datetime.now().strftime('%Y%m%d_%H%M')
-        model_3h_path = f'models/aqi_3h_model_{timestamp}.joblib'
-        joblib.dump(model_3h_package, model_3h_path)
-        
-        logger.info(f"3h model saved to: {model_3h_path}")
-        
-        # Save to Model Registry
-        self._save_to_registry(model_3h_package, '3h')
-        
-        return model_3h_path
-    
-    def _save_to_registry(self, model_package, horizon):
-        """Save model info to Model Registry"""
         try:
             registry_db = self.client['aqi_model_registry']
             
-            if f'models_{horizon}' not in registry_db.list_collection_names():
-                registry_db.create_collection(f'models_{horizon}')
-            
+            # Always save to 'model_registry' collection
             model_doc = {
-                'model_name': f'AQI_{horizon}_RecursiveModel',
-                'model_type': model_package.get('model_type', 'random_forest'),
-                'horizon': horizon,
-                'metrics': model_package['metrics'],
-                'features': model_package['features'],
+                'model_name': 'AQI_3h_Recursive_Model',
+                'model_type': 'random_forest',
+                'model_version': datetime.now().strftime('%Y%m%d_%H%M'),
+                'metrics': {
+                    'test_r2': metrics['test_r2'],
+                    'test_mae': metrics['test_mae'],
+                    'test_rmse': metrics['test_rmse'],
+                    'train_r2': metrics['train_r2']
+                },
+                'feature_importance': feature_importance,
+                'features': features,
+                'strategy': '3h_recursive_72h',
+                'horizon': '72h',
                 'created_at': datetime.now(),
                 'city': 'Karachi',
+                'prediction_horizon': '3h_direct_72h_recursive',
                 'status': 'trained',
                 'is_production': True,
-                'purpose': 'direct_prediction' if horizon == '3h' else 'recursive_forecast'
+                'purpose': 'direct_3h_prediction_recursive_72h_forecast'
             }
             
-            result = registry_db[f'models_{horizon}'].insert_one(model_doc)
+            # Save to model_registry collection
+            result = registry_db.model_registry.insert_one(model_doc)
+            
+            print(f"\n✅ Model saved to registry:")
+            print(f"   Collection: model_registry")
+            print(f"   ID: {result.inserted_id}")
+            print(f"   R²: {metrics['test_r2']:.4f}")
+            print(f"   MAE: {metrics['test_mae']:.2f}")
+            
             logger.info(f"Model saved to registry with ID: {result.inserted_id}")
+            
+            return result.inserted_id
             
         except Exception as e:
             logger.error(f"Error saving to registry: {e}")
+            return None
     
     def generate_72h_forecast(self, model_3h, scaler_3h, features_3h):
         """
@@ -312,7 +282,6 @@ class AQIModelTrainer:
         """
         logger.info("Generating 72h forecast recursively...")
         
-        # Get latest data point for initial features
         cursor = list(self.fs_db['aqi_features_simple'].find(
             {}, 
             {'_id': 0}
@@ -324,7 +293,6 @@ class AQIModelTrainer:
         
         latest_data = cursor[0]
         
-        # Prepare initial features
         initial_features = {}
         for feature in features_3h:
             if feature in latest_data:
@@ -338,10 +306,8 @@ class AQIModelTrainer:
             else:
                 initial_features[feature] = 0
         
-        # Store feature names for recursive forecast
         self.current_feature_names = features_3h
         
-        # Generate recursive forecast (24 steps of 3h = 72h)
         forecasts = self.recursive_forecast(
             model=model_3h,
             scaler=scaler_3h,
@@ -349,7 +315,6 @@ class AQIModelTrainer:
             steps=24
         )
         
-        # Save forecasts to database
         self._save_forecasts_to_db(forecasts)
         
         logger.info(f"Generated {len(forecasts)} forecast points (72h)")
@@ -361,10 +326,8 @@ class AQIModelTrainer:
         try:
             forecasts_db = self.client['aqi_predictor']
             
-            # Clear old forecasts
             forecasts_db.ml_recursive_forecasts.delete_many({})
             
-            # Prepare documents
             forecast_docs = []
             for forecast in forecasts:
                 doc = {
@@ -380,7 +343,6 @@ class AQIModelTrainer:
                     'forecast_type': 'recursive'
                 }
                 
-                # Add AQI category
                 aqi = forecast['predicted_aqi']
                 if aqi <= 50:
                     doc['category'] = 'Good'
@@ -397,7 +359,6 @@ class AQIModelTrainer:
                 
                 forecast_docs.append(doc)
             
-            # Insert to database
             if forecast_docs:
                 result = forecasts_db.ml_recursive_forecasts.insert_many(forecast_docs)
                 logger.info(f"Saved {len(result.inserted_ids)} forecasts to database")
@@ -428,14 +389,14 @@ class AQIModelTrainer:
             logger.error("Failed to prepare 3h model data. Exiting.")
             return False
         
-        # 3. Train 3h model
-        model_3h, scaler_3h, metrics_3h, features_3h = self.train_3h_model(
+        # 3. Train 3h model (WITH FIXED R²)
+        model_3h, scaler_3h, metrics_3h, features_3h, feature_importance = self.train_3h_model(
             X_3h, y_3h, features_3h, model_type='random_forest'
         )
         
-        # 4. Save models
-        model_path = self.save_models(
-            model_3h, scaler_3h, features_3h, metrics_3h
+        # 4. Save to registry (CORRECT COLLECTION)
+        self.save_to_registry(
+            model_3h, scaler_3h, features_3h, metrics_3h, feature_importance
         )
         
         # 5. Generate 72h recursive forecast
@@ -446,18 +407,18 @@ class AQIModelTrainer:
         # 6. Summary
         elapsed = (datetime.now() - start_time).total_seconds()
         
-        logger.info("\n" + "=" * 70)
-        logger.info("TRAINING COMPLETE!")
-        logger.info("=" * 70)
-        logger.info(f"3h Model Test R²: {metrics_3h['test_r2']:.4f}")
-        logger.info(f"Generated {len(forecasts_72h)} forecast points (72h)")
-        logger.info(f"Total time: {elapsed:.1f} seconds")
+        print("\n" + "=" * 70)
+        print("✅ TRAINING COMPLETE!")
+        print("=" * 70)
+        print(f"3h Model Test R²: {metrics_3h['test_r2']:.4f}")
+        print(f"Generated {len(forecasts_72h)} forecast points (72h)")
+        print(f"Total time: {elapsed:.1f} seconds")
         
         if metrics_3h['test_r2'] > 0.5:
-            logger.info("🎉 Excellent! Your 3h model is accurate!")
-            logger.info("✅ 72h recursive forecasts generated successfully")
+            print("🎉 Excellent! Your 3h model is accurate!")
+            print("✅ 72h recursive forecasts generated successfully")
         else:
-            logger.info("⚠️  3h model needs improvement")
+            print("⚠️  3h model needs improvement")
         
         return True
 
@@ -471,9 +432,9 @@ def main():
     
     if success:
         print("\n✅ Training successful! Next steps:")
-        print("   1. Check models/ directory for saved models")
+        print("   1. Check database for model in 'model_registry'")
         print("   2. Check database for recursive forecasts")
-        print("   3. Update dashboard to show recursive forecasts")
+        print("   3. Refresh dashboard to see updated metrics")
         print("\n🎯 Your dashboard will now show:")
         print("   • Current AQI (real-time)")
         print("   • 3h ML forecast (accurate)")

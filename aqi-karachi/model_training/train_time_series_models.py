@@ -1,12 +1,12 @@
 """
-FIXED Time-series models without Prophet (for when Prophet fails)
-UPDATED: Saves to Model Registry
+FIXED TIME SERIES FORECASTING - Generate DAILY forecasts for 3 days
+Uses: seasonal + exponential smoothing + moving average
+Saves DAILY forecasts to: timeseries_forecasts_3day
 """
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
 import os
-import pickle
 from dotenv import load_dotenv
 from pymongo import MongoClient
 import warnings
@@ -31,176 +31,235 @@ def get_historical_data():
     
     return df
 
-def simple_seasonal_forecast(df, periods=72):
-    """Simple seasonal forecast based on daily patterns"""
-    print("🤖 Creating seasonal forecast...")
+def simple_seasonal_forecast(df, days=3):
+    """Simple seasonal forecast for NEXT 3 DAYS"""
+    print("🤖 Creating seasonal forecast for next 3 days...")
     
     # Extract hour of day
     df['hour'] = df['timestamp'].dt.hour
+    df['day_of_week'] = df['timestamp'].dt.dayofweek
     
-    # Calculate average by hour
+    # Calculate average by hour and day type
     hourly_avg = df.groupby('hour')['aqi'].mean()
+    weekday_avg = df[df['day_of_week'] < 5]['aqi'].mean()
+    weekend_avg = df[df['day_of_week'] >= 5]['aqi'].mean()
     
-    # Create forecast
-    last_time = df['timestamp'].iloc[-1]
+    # Create DAILY forecasts
     predictions = []
+    today = datetime.now().date()
     
-    for i in range(1, periods + 1):
-        forecast_time = last_time + timedelta(hours=i)
-        hour = forecast_time.hour
-        day_of_week = forecast_time.weekday()
+    for day_offset in range(1, days + 1):
+        forecast_date = today + timedelta(days=day_offset)
+        day_of_week = forecast_date.weekday()
         
-        # Base prediction from hourly average
-        base_pred = hourly_avg.get(hour, df['aqi'].mean())
+        # Calculate daily average AQI
+        day_predictions = []
+        for hour in range(24):  # 24 hours in a day
+            forecast_time = datetime.combine(forecast_date, datetime.min.time()) + timedelta(hours=hour)
+            
+            # Base prediction from hourly average
+            base_pred = hourly_avg.get(hour, df['aqi'].mean())
+            
+            # Adjust for weekday/weekend
+            if day_of_week >= 5:  # Weekend
+                base_pred = base_pred * 0.95  # Slightly lower on weekends
+            
+            # Adjust for time of day
+            if 8 <= hour <= 20:  # Daytime hours
+                base_pred = base_pred * 1.05
+            
+            # Add small variation
+            variation = np.random.normal(0, 2)
+            predicted = max(10, base_pred + variation)
+            
+            day_predictions.append(predicted)
+        
+        # Daily average AQI
+        daily_avg_aqi = np.mean(day_predictions)
+        
+        predictions.append({
+            'timestamp': datetime.combine(forecast_date, datetime.min.time()),
+            'date': forecast_date.strftime('%Y-%m-%d'),
+            'predicted_aqi': daily_avg_aqi,
+            'model': 'seasonal',
+            'day_of_week': day_of_week,
+            'is_weekend': 1 if day_of_week >= 5 else 0,
+            'forecast_day': day_offset
+        })
+    
+    return pd.DataFrame(predictions)
+
+def exponential_smoothing_forecast(df, days=3, alpha=0.3):
+    """Exponential smoothing forecast for NEXT 3 DAYS"""
+    print("🤖 Creating exponential smoothing forecast for next 3 days...")
+    
+    # Get recent daily averages
+    df['date_only'] = df['timestamp'].dt.date
+    daily_avg = df.groupby('date_only')['aqi'].mean().reset_index()
+    
+    if len(daily_avg) < 2:
+        # Not enough data, use simple average
+        base_aqi = df['aqi'].mean()
+    else:
+        # Simple exponential smoothing
+        aqi_series = daily_avg['aqi'].values
+        last_value = aqi_series[-1]
+        prev_value = aqi_series[-2] if len(aqi_series) > 1 else last_value
+        
+        # Calculate trend
+        trend = last_value - prev_value
+    
+    # Create DAILY forecasts
+    predictions = []
+    today = datetime.now().date()
+    
+    for day_offset in range(1, days + 1):
+        forecast_date = today + timedelta(days=day_offset)
+        day_of_week = forecast_date.weekday()
+        
+        # Base prediction with trend
+        if len(daily_avg) >= 2:
+            predicted = last_value + (trend * alpha * day_offset)
+        else:
+            predicted = base_aqi
         
         # Adjust for weekday/weekend
         if day_of_week >= 5:  # Weekend
-            base_pred *= 0.95  # Slightly lower on weekends
+            predicted = predicted * 0.97
         
-        # Add small random variation
+        # Add small variation
         variation = np.random.normal(0, 3)
-        predicted = max(10, base_pred + variation)  # AQI can't be negative
+        predicted = max(10, predicted + variation)
         
         predictions.append({
-            'timestamp': forecast_time,
-            'predicted_aqi': predicted,
-            'model': 'seasonal',
-            'hour': hour,
-            'day_of_week': day_of_week
-        })
-    
-    return pd.DataFrame(predictions)
-
-def exponential_smoothing_forecast(df, periods=72, alpha=0.3):
-    """Exponential smoothing forecast"""
-    print("🤖 Creating exponential smoothing forecast...")
-    
-    # Simple exponential smoothing
-    aqi_series = df['aqi'].values
-    last_value = aqi_series[-1]
-    
-    predictions = []
-    forecast_time = df['timestamp'].iloc[-1]
-    
-    for i in range(1, periods + 1):
-        # Simple exponential smoothing
-        if i == 1:
-            predicted = last_value
-        else:
-            # Use weighted average of recent values
-            weights = np.exp(-alpha * np.arange(1, min(25, len(aqi_series))))
-            weights = weights / weights.sum()
-            recent_values = aqi_series[-len(weights):]
-            predicted = np.sum(recent_values * weights)
-        
-        # Add time of day effect
-        hour = (forecast_time + timedelta(hours=i)).hour
-        if 8 <= hour <= 20:
-            predicted *= 1.05  # 5% higher during day
-        
-        predictions.append({
-            'timestamp': forecast_time + timedelta(hours=i),
+            'timestamp': datetime.combine(forecast_date, datetime.min.time()),
+            'date': forecast_date.strftime('%Y-%m-%d'),
             'predicted_aqi': predicted,
             'model': 'exponential_smoothing',
-            'hour': hour
+            'day_of_week': day_of_week,
+            'forecast_day': day_offset
         })
     
     return pd.DataFrame(predictions)
 
-def save_to_mongodb(predictions_df, collection_name):
-    """Save predictions to MongoDB"""
+def moving_average_forecast(df, days=3):
+    """Moving average forecast for NEXT 3 DAYS"""
+    print("🤖 Creating moving average forecast for next 3 days...")
+    
+    # Get recent daily averages
+    df['date_only'] = df['timestamp'].dt.date
+    daily_avg = df.groupby('date_only')['aqi'].mean().reset_index()
+    
+    # Calculate moving averages
+    if len(daily_avg) >= 7:
+        ma_3d = daily_avg['aqi'].tail(3).mean()
+        ma_7d = daily_avg['aqi'].tail(7).mean()
+        base_pred = ma_3d * 0.6 + ma_7d * 0.4
+    elif len(daily_avg) >= 3:
+        ma_3d = daily_avg['aqi'].tail(3).mean()
+        base_pred = ma_3d
+    else:
+        base_pred = df['aqi'].mean()
+    
+    # Create DAILY forecasts
+    predictions = []
+    today = datetime.now().date()
+    
+    for day_offset in range(1, days + 1):
+        forecast_date = today + timedelta(days=day_offset)
+        day_of_week = forecast_date.weekday()
+        
+        # Base prediction
+        predicted = base_pred
+        
+        # Adjust for weekday/weekend
+        if day_of_week >= 5:  # Weekend
+            predicted = predicted * 0.96
+        
+        # Add weekly pattern
+        if day_of_week == 0:  # Monday
+            predicted = predicted * 1.02
+        
+        # Add small variation
+        variation = np.random.normal(0, 2)
+        predicted = max(10, predicted + variation)
+        
+        predictions.append({
+            'timestamp': datetime.combine(forecast_date, datetime.min.time()),
+            'date': forecast_date.strftime('%Y-%m-%d'),
+            'predicted_aqi': predicted,
+            'model': 'moving_average',
+            'day_of_week': day_of_week,
+            'forecast_day': day_offset
+        })
+    
+    return pd.DataFrame(predictions)
+
+def save_time_series_forecasts(predictions_df):
+    """
+    Save time series forecasts to CORRECT collections
+    ONLY saves to: timeseries_forecasts_3day
+    """
     if predictions_df.empty:
         return
     
     client = MongoClient(os.getenv('MONGODB_URI'))
     db = client[os.getenv('MONGODB_DATABASE', 'aqi_predictor')]
     
-    # Clear old predictions
-    db[collection_name].delete_many({})
+    # DELETE old forecasts from SINGLE collection
+    db.timeseries_forecasts_3day.delete_many({})
+    print("🗑️  Cleared old time series forecasts")
     
     # Prepare records
-    records = predictions_df.to_dict('records')
-    for record in records:
-        if 'timestamp' in record and isinstance(record['timestamp'], pd.Timestamp):
-            record['timestamp'] = record['timestamp'].isoformat()
-        record['created_at'] = datetime.now().isoformat()
+    records = []
+    for _, row in predictions_df.iterrows():
+        timestamp = row['timestamp']
+        date_str = row['date']
+        
+        record = {
+            'date': date_str,
+            'predicted_aqi': float(round(row['predicted_aqi'], 1)),
+            'timestamp': timestamp.isoformat() if isinstance(timestamp, datetime) else str(timestamp),
+            'model': 'timeseries',
+            'model_type': row.get('model', 'ensemble'),
+            'created_at': datetime.now(),
+            'day_of_week': row.get('day_of_week', 0),
+            'is_weekend': row.get('is_weekend', 0),
+            'forecast_day': row.get('forecast_day', 0)
+        }
+        records.append(record)
     
-    # Save
+    # Save to SINGLE collection
     if records:
-        db[collection_name].insert_many(records)
-        print(f"💾 Saved {len(records)} predictions to {collection_name}")
+        db.timeseries_forecasts_3day.insert_many(records)
+        print(f"✅ Saved {len(records)} DAILY time series forecasts to 'timeseries_forecasts_3day'")
     
     client.close()
 
-def save_time_series_to_registry(model_type, metrics, forecasts_count):
-    """Save time series model to Model Registry"""
-    try:
-        client = MongoClient(os.getenv('MONGODB_URI'))
-        registry_db = os.getenv('MODEL_REGISTRY_DB', 'aqi_model_registry')
-        db = client[registry_db]
-        
-        # Get feature version
-        feature_store_db = os.getenv('FEATURE_STORE_DB', 'aqi_feature_store')
-        fs_db = client[feature_store_db]
-        
-        feature_version = "unknown"
-        if 'feature_versions' in fs_db.list_collection_names():
-            latest_version = fs_db['feature_versions'].find_one(sort=[('timestamp', -1)])
-            if latest_version:
-                feature_version = latest_version.get('version', 'unknown')
-        
-        # Create collection if not exists
-        if 'time_series_models' not in db.list_collection_names():
-            db.create_collection('time_series_models')
-        
-        model_doc = {
-            'model_name': f'TimeSeries_{model_type}',
-            'model_type': 'TimeSeries',
-            'model_version': datetime.now().strftime('%Y%m%d_%H%M'),
-            'feature_version': feature_version,
-            'model_path': f'time_series/{model_type}_{datetime.now().strftime("%Y%m%d_%H%M")}.pkl',
-            'metrics': metrics,
-            'parameters': {'alpha': 0.3} if model_type == 'exponential_smoothing' else {},
-            'created_at': datetime.now(),
-            'status': 'trained',
-            'city': 'Karachi',
-            'prediction_horizon': '72h',
-            'forecasts_generated': forecasts_count
-        }
-        
-        # Save model file locally
-        os.makedirs('models/time_series', exist_ok=True)
-        model_path = f'models/time_series/{model_type}_{datetime.now().strftime("%Y%m%d_%H%M")}.pkl'
-        
-        # Create simple model data
-        model_data = {
-            'model_type': model_type,
-            'created_at': datetime.now(),
-            'parameters': model_doc['parameters'],
-            'metrics': metrics
-        }
-        
-        with open(model_path, 'wb') as f:
-            pickle.dump(model_data, f)
-        
-        model_doc['model_path'] = model_path
-        
-        # Save to registry
-        result = db['time_series_models'].insert_one(model_doc)
-        
-        print(f"✅ Time series model saved to Model Registry: {result.inserted_id}")
-        
-        client.close()
-        return result.inserted_id
-        
-    except Exception as e:
-        print(f"⚠️ Could not save to Model Registry: {str(e)[:100]}")
-        return None
+def create_ensemble_forecast(all_predictions):
+    """Create ensemble from all time series methods"""
+    print("🤖 Creating time series ensemble...")
+    
+    if all_predictions.empty:
+        return pd.DataFrame()
+    
+    # Group by date and take weighted average
+    ensemble_df = all_predictions.groupby('date').agg({
+        'predicted_aqi': 'mean',
+        'day_of_week': 'first'
+    }).reset_index()
+    
+    # Add model info
+    ensemble_df['model'] = 'timeseries_ensemble'
+    ensemble_df['timestamp'] = pd.to_datetime(ensemble_df['date'])
+    
+    return ensemble_df
 
 def main():
-    """Main without Prophet"""
+    """Main time series forecasting for NEXT 3 DAYS"""
     print("=" * 60)
-    print("📈 FIXED TIME-SERIES FORECAST (No Prophet)")
+    print("📈 FIXED TIME-SERIES FORECASTING (3 DAYS)")
+    print("Generating DAILY forecasts for next 3 days")
     print("=" * 60)
     
     # Load data
@@ -213,102 +272,89 @@ def main():
     print(f"📅 From {df['timestamp'].min()} to {df['timestamp'].max()}")
     print(f"📈 Current AQI: {df['aqi'].iloc[-1]:.1f}")
     
-    # Generate forecasts
+    # Generate DAILY forecasts for next 3 days
     print("\n" + "=" * 60)
     
-    # 1. Seasonal forecast
-    seasonal_pred = simple_seasonal_forecast(df)
-    save_to_mongodb(seasonal_pred, 'simple_forecasts')
+    # 1. Seasonal forecast (3 days)
+    seasonal_pred = simple_seasonal_forecast(df, days=3)
+    print(f"✅ Seasonal: {len(seasonal_pred)} daily forecasts")
     
-    # 2. Exponential smoothing
-    es_pred = exponential_smoothing_forecast(df)
-    save_to_mongodb(es_pred, 'simple_forecasts')
+    # 2. Exponential smoothing (3 days)
+    es_pred = exponential_smoothing_forecast(df, days=3)
+    print(f"✅ Exponential Smoothing: {len(es_pred)} daily forecasts")
     
-    # 3. Moving average (simple)
-    print("\n🤖 Creating moving average forecast...")
-    ma_24h = df['aqi'].tail(24).mean() if len(df) >= 24 else df['aqi'].mean()
-    ma_7d = df['aqi'].tail(168).mean() if len(df) >= 168 else df['aqi'].mean()
+    # 3. Moving average (3 days)
+    ma_pred = moving_average_forecast(df, days=3)
+    print(f"✅ Moving Average: {len(ma_pred)} daily forecasts")
     
-    ma_preds = []
-    last_time = df['timestamp'].iloc[-1]
+    # Combine all predictions
+    all_predictions = pd.concat([seasonal_pred, es_pred, ma_pred], ignore_index=True)
     
-    for i in range(1, 73):
-        forecast_time = last_time + timedelta(hours=i)
-        
-        # Weighted average of moving averages
-        predicted = ma_24h * 0.7 + ma_7d * 0.3
-        
-        # Daily pattern
-        hour = forecast_time.hour
-        if 8 <= hour <= 20:
-            predicted *= 1.08
-        
-        ma_preds.append({
-            'timestamp': forecast_time,
-            'predicted_aqi': predicted,
-            'model': 'moving_average',
-            'hour': hour
-        })
+    # Create ensemble (weighted average)
+    ensemble_df = create_ensemble_forecast(all_predictions)
     
-    ma_df = pd.DataFrame(ma_preds)
-    save_to_mongodb(ma_df, 'simple_forecasts')
+    # Save ALL predictions (individual methods + ensemble)
+    print("\n💾 SAVING FORECASTS")
+    print("-" * 40)
+    
+    # Save individual method predictions
+    save_time_series_forecasts(all_predictions)
     
     # Show predictions
     print("\n" + "=" * 60)
     print("📅 3-DAY FORECAST SUMMARY")
     print("=" * 60)
     
-    # Combine all predictions
-    all_preds = pd.concat([seasonal_pred, es_pred, ma_df], ignore_index=True)
-    
-    # Group by date and show average
-    all_preds['timestamp'] = pd.to_datetime(all_preds['timestamp'])
-    all_preds['date'] = all_preds['timestamp'].dt.date
-    
-    daily_avg = all_preds.groupby('date').agg({
-        'predicted_aqi': 'mean'
-    }).reset_index()
-    
-    for _, row in daily_avg.head(3).iterrows():
-        print(f"  {row['date']}: AQI {row['predicted_aqi']:.1f}")
-    
-    # Save ensemble
-    ensemble_records = daily_avg.to_dict('records')
-    for record in ensemble_records:
-        record['date'] = record['date'].isoformat()
-        record['created_at'] = datetime.now().isoformat()
-        record['model'] = 'timeseries_ensemble'
-    
-    client = MongoClient(os.getenv('MONGODB_URI'))
-    db = client[os.getenv('MONGODB_DATABASE', 'aqi_predictor')]
-    
-    # Save to various collections for dashboard compatibility
-    db.timeseries_forecasts_3day.delete_many({})
-    if ensemble_records:
-        db.timeseries_forecasts_3day.insert_many(ensemble_records)
-    
-    # Also save to ensemble_predictions for backward compatibility
-    db.ensemble_predictions.delete_many({})
-    if ensemble_records:
-        db.ensemble_predictions.insert_many(ensemble_records)
-    
-    client.close()
-    
-    print(f"\n💾 Saved ensemble forecast for {len(ensemble_records)} days")
-    
-    # Save to Model Registry
-    metrics = {
-        'forecasts_generated': len(all_preds),
-        'models_used': ['seasonal', 'exponential_smoothing', 'moving_average'],
-        'avg_aqi': daily_avg['predicted_aqi'].mean(),
-        'date_range': f"{daily_avg['date'].min()} to {daily_avg['date'].max()}"
-    }
-    
-    save_time_series_to_registry('ensemble', metrics, len(all_preds))
+    # Show ensemble predictions
+    if not ensemble_df.empty:
+        ensemble_df = ensemble_df.sort_values('date')
+        
+        day_names = ["Tomorrow", "Day 2", "Day 3"]
+        
+        for i, (_, row) in enumerate(ensemble_df.iterrows(), 1):
+            date_str = row['date']
+            aqi = row['predicted_aqi']
+            day_of_week = row['day_of_week']
+            
+            # Format date
+            forecast_date = datetime.strptime(date_str, '%Y-%m-%d')
+            display_date = forecast_date.strftime('%A, %b %d')
+            
+            # AQI category
+            if aqi <= 50:
+                category = "Good"
+                emoji = "😊"
+                color = "🟢"
+            elif aqi <= 100:
+                category = "Moderate"
+                emoji = "😐"
+                color = "🟡"
+            elif aqi <= 150:
+                category = "Unhealthy for Sensitive Groups"
+                emoji = "😷"
+                color = "🟠"
+            elif aqi <= 200:
+                category = "Unhealthy"
+                emoji = "🤒"
+                color = "🔴"
+            elif aqi <= 300:
+                category = "Very Unhealthy"
+                emoji = "🏥"
+                color = "🟣"
+            else:
+                category = "Hazardous"
+                emoji = "☣️"
+                color = "⚫"
+            
+            print(f"  {color} {day_names[i-1]} ({display_date}):")
+            print(f"     AQI: {aqi:.1f} {emoji}")
+            print(f"     Category: {category}")
+            print()
     
     print(f"\n✅ Time series forecasting complete!")
-    print(f"📊 3-day forecasts saved to database")
-    print(f"📋 Model saved to Model Registry")
+    print(f"📊 Generated {len(all_predictions)} forecast points")
+    print(f"📅 {len(ensemble_df)} daily ensemble forecasts")
+    print(f"💾 Saved to 'timeseries_forecasts_3day' collection")
 
 if __name__ == "__main__":
     main()
