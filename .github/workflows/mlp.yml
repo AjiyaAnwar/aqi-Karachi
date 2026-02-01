@@ -1,13 +1,15 @@
 name: AQI Karachi ML Pipeline
 
 on:
+  # Scheduled runs
   schedule:
-    - cron: '0 */3 * * *'
-    - cron: '0 1 * * *'
-    - cron: '0 4 * * *'
-    - cron: '0 16 * * *'
-    - cron: '0 5 * * 0'
-    
+    - cron: '0 */3 * * *'    # Every 3 hours
+    - cron: '0 1 * * *'      # Daily at 1 AM UTC
+    - cron: '0 4 * * *'      # Daily at 4 AM UTC
+    - cron: '0 16 * * *'     # Daily at 4 PM UTC
+    - cron: '0 5 * * 0'      # Sunday at 5 AM UTC
+  
+  # Manual trigger
   workflow_dispatch:
     inputs:
       pipeline_step:
@@ -21,6 +23,10 @@ on:
           - features
           - train_combined
           - full
+  
+  # Run on push to main
+  push:
+    branches: [main]
 
 jobs:
   execute-pipeline:
@@ -37,6 +43,7 @@ jobs:
     
     - name: Test
       run: |
-        echo "✅ Workflow is running!"
-        echo "Step selected: ${{ github.event.inputs.pipeline_step }}"
-        echo "Time: $(date)"
+        echo "✅ AQI Pipeline Started"
+        echo "Event: ${{ github.event_name }}"
+        echo "Time UTC: $(date -u '+%Y-%m-%d %H:%M:%S')"
+        echo "Time Karachi: $(TZ='Asia/Karachi' date '+%Y-%m-%d %H:%M:%S')"
