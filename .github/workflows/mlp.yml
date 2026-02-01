@@ -1,39 +1,59 @@
-name: AQI Karachi ML Pipeline
+name: AQI Karachi ML Pipeline - PRODUCTION
 
 on:
-  # Scheduled runs
+  # ========== SCHEDULED RUNS ==========
   schedule:
-    - cron: '0 */3 * * *'    # Every 3 hours
-    - cron: '0 1 * * *'      # Daily at 1 AM UTC
-    - cron: '0 4 * * *'      # Daily at 4 AM UTC
-    - cron: '0 16 * * *'     # Daily at 4 PM UTC
-    - cron: '0 5 * * 0'      # Sunday at 5 AM UTC
+    # Data collection every 3 hours
+    - cron: '0 */3 * * *'
+    
+    # Feature engineering daily at 1 AM UTC
+    - cron: '0 1 * * *'
+    
+    # Training twice daily (4 AM & 4 PM UTC)
+    - cron: '0 4 * * *'
+    - cron: '0 16 * * *'
+    
+    # Full pipeline every Sunday at 5 AM UTC
+    - cron: '0 5 * * 0'
   
-  # Manual trigger
+  # ========== MANUAL TRIGGER ==========
   workflow_dispatch:
     inputs:
       pipeline_step:
-        description: 'Select pipeline step'
+        description: 'Select pipeline step to run'
         required: false
-        default: 'test'
+        default: 'full'
         type: choice
         options:
-          - test
           - data_incremental
+          - data_full
           - features
           - train_combined
+          - predictions
           - full
   
-  # Run on push to main
+  # ========== CODE PUSH TRIGGER ==========
   push:
     branches: [main]
+    paths:
+      - 'aqi-karachi/**'
+      - '.github/workflows/**'
 
 jobs:
   execute-pipeline:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
+    
+    env:
+      MONGODB_URI: ${{ secrets.MONGODB_URI }}
+      CITY_NAME: Karachi
+      CITY_LAT: 24.8607
+      CITY_LON: 67.0011
+      TIMEZONE: Asia/Karachi
+      GITHUB_ACTIONS: true
     
     steps:
-    - name: Checkout
+    - name: Checkout repository
       uses: actions/checkout@v4
     
     - name: Setup Python
@@ -41,9 +61,73 @@ jobs:
       with:
         python-version: '3.10'
     
-    - name: Test
+    - name: Install dependencies
       run: |
-        echo "✅ AQI Pipeline Started"
-        echo "Event: ${{ github.event_name }}"
-        echo "Time UTC: $(date -u '+%Y-%m-%d %H:%M:%S')"
-        echo "Time Karachi: $(TZ='Asia/Karachi' date '+%Y-%m-%d %H:%M:%S')"
+        python -m pip install --upgrade pip
+        pip install pymongo python-dotenv pandas numpy scikit-learn joblib
+    
+    - name: Determine pipeline step
+      id: determine_step
+      run: |
+        echo "🔍 Determining pipeline step..."
+        
+        if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+          STEP="${{ github.event.inputs.pipeline_step }}"
+          echo "Manual trigger, step: $STEP"
+          echo "step=$STEP" >> $GITHUB_OUTPUT
+          
+        elif [[ "${{ github.event_name }}" == "schedule" ]]; then
+          HOUR=$(date -u +%H)
+          DAY=$(date -u +%u)
+          
+          echo "Scheduled trigger, UTC Hour: $HOUR, Day: $DAY"
+          
+          case $HOUR in
+            "00"|"03"|"06"|"09"|"12"|"15"|"18"|"21")
+              echo "Running incremental data collection"
+              echo "step=data_incremental" >> $GITHUB_OUTPUT
+              ;;
+            "01")
+              echo "Running feature engineering"
+              echo "step=features" >> $GITHUB_OUTPUT
+              ;;
+            "04"|"16")
+              echo "Running combined training"
+              echo "step=train_combined" >> $GITHUB_OUTPUT
+              ;;
+            "05")
+              if [[ $DAY -eq 7 ]]; then
+                echo "Running full pipeline (Sunday)"
+                echo "step=full" >> $GITHUB_OUTPUT
+              else
+                echo "Skipping (not Sunday)"
+                echo "step=skip" >> $GITHUB_OUTPUT
+              fi
+              ;;
+            *)
+              echo "No scheduled task"
+              echo "step=skip" >> $GITHUB_OUTPUT
+              ;;
+          esac
+          
+        else
+          echo "Push event, running full pipeline"
+          echo "step=full" >> $GITHUB_OUTPUT
+        fi
+    
+    - name: Execute pipeline step
+      if: steps.determine_step.outputs.step != 'skip'
+      run: |
+        STEP="${{ steps.determine_step.outputs.step }}"
+        echo "🚀 Executing: $STEP"
+        
+        # Your execution logic here
+        echo "This would run: $STEP"
+        echo "✅ Step completed"
+    
+    - name: Summary
+      run: |
+        echo "📊 PIPELINE SUMMARY"
+        echo "Step: ${{ steps.determine_step.outputs.step }}"
+        echo "Status: ${{ job.status }}"
+        echo "Time Karachi: $(TZ='Asia/Karachi' date '+%Y-%m-%d %H:%M:%S %Z')"
