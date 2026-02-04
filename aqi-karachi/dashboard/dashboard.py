@@ -55,7 +55,7 @@ def get_project_root():
 PROJECT_ROOT = get_project_root()
 
 def check_prediction_freshness():
-    """Check if predictions are fresh (<3 hours old)"""
+    """FIXED: Check if predictions are fresh (<3 hours old)"""
     try:
         from pymongo import MongoClient
         
@@ -68,7 +68,7 @@ def check_prediction_freshness():
         client = MongoClient(uri)
         db = client[db_name]
         
-        # Check ensemble forecasts
+        # FIXED: Check ensemble forecasts collection (your actual collection)
         latest = db.ensemble_forecasts_3day.find_one(sort=[('created_at', -1)])
         client.close()
         
@@ -100,17 +100,17 @@ def check_prediction_freshness():
         return "error", f"Error: {str(e)[:50]}", None
 
 def trigger_prediction_update():
-    """Actually run prediction update - returns success status"""
+    """FIXED: Actually run prediction update - returns success status"""
     try:
-        script_path = os.path.join(PROJECT_ROOT, "model_training", "runallmodels.py")
+        # FIXED: Run the orchestrator directly
+        orchestrator_path = os.path.join(PROJECT_ROOT, "model_training", "runallmodels.py")
         
-        if os.path.exists(script_path):
+        if os.path.exists(orchestrator_path):
             result = subprocess.run(
-                [sys.executable, script_path],
+                [sys.executable, orchestrator_path],
                 capture_output=True,
                 text=True,
                 cwd=PROJECT_ROOT,
-                input="1\n",
                 timeout=300
             )
             
@@ -294,12 +294,13 @@ def load_current_aqi():
         
         collections = db.list_collection_names()
         
+        # FIXED: Check your actual collections
         if 'aqi_measurements' in collections:
             latest = db.aqi_measurements.find_one(sort=[('timestamp', -1)])
             collection_name = 'aqi_measurements'
-        elif 'aqi_features' in collections:
-            latest = db.aqi_features.find_one(sort=[('timestamp', -1)])
-            collection_name = 'aqi_features'
+        elif 'aqi_features_simple' in collections:
+            latest = db.aqi_features_simple.find_one(sort=[('timestamp', -1)])
+            collection_name = 'aqi_features_simple'
         else:
             return None
         
@@ -331,7 +332,7 @@ def load_current_aqi():
 
 @st.cache_data(ttl=3600)
 def load_historical_data(days=60):
-    """Load historical data for EDA"""
+    """FIXED: Load historical data for EDA from correct collections"""
     try:
         from pymongo import MongoClient
         
@@ -348,16 +349,17 @@ def load_historical_data(days=60):
         
         collections = db.list_collection_names()
         
+        # FIXED: Check your actual data collections
         if 'aqi_measurements' in collections:
             historical_data = list(db.aqi_measurements.find({
                 'timestamp': {'$gte': cutoff_date.isoformat()}
             }).sort('timestamp', 1))
             source_collection = 'aqi_measurements'
-        elif 'aqi_features' in collections:
-            historical_data = list(db.aqi_features.find({
+        elif 'aqi_features_simple' in collections:
+            historical_data = list(db.aqi_features_simple.find({
                 'timestamp': {'$gte': cutoff_date}
             }).sort('timestamp', 1))
-            source_collection = 'aqi_features'
+            source_collection = 'aqi_features_simple'
         else:
             client.close()
             return pd.DataFrame()
@@ -392,10 +394,9 @@ def load_historical_data(days=60):
         
     except Exception as e:
         return pd.DataFrame()
-
 @st.cache_data(ttl=3600)
 def load_ml_forecast():
-    """Load ML model forecasts"""
+    """FIXED: Load ML model forecasts from correct collections"""
     try:
         from pymongo import MongoClient
         
@@ -408,10 +409,11 @@ def load_ml_forecast():
         client = MongoClient(uri)
         db = client[db_name]
         
+        # FIXED: Check your actual ML forecast collections
         forecast_collections = [
+            'ml_recursive_forecasts',  # Your actual collection
             'ml_forecasts_3day',
             'ml_forecasts', 
-            'ml_recursive_forecasts'
         ]
         
         for coll_name in forecast_collections:
@@ -420,13 +422,14 @@ def load_ml_forecast():
                 if forecast_data:
                     df = pd.DataFrame(forecast_data)
                     
+                    # FIXED: Handle different date formats
                     if 'date' in df.columns:
                         try:
                             df['timestamp'] = pd.to_datetime(df['date'])
                         except:
                             df['timestamp'] = df['date']
                     elif 'timestamp' in df.columns:
-                        df['date'] = df['timestamp'].dt.date
+                        df['date'] = pd.to_datetime(df['timestamp']).dt.date
                     
                     df = df.sort_values('timestamp')
                     df['source'] = 'ML Model'
@@ -446,7 +449,7 @@ def load_ml_forecast():
 
 @st.cache_data(ttl=3600)
 def load_time_series_forecast():
-    """Load time series forecasts"""
+    """FIXED: Load time series forecasts from correct collection"""
     try:
         from pymongo import MongoClient
         
@@ -459,8 +462,9 @@ def load_time_series_forecast():
         client = MongoClient(uri)
         db = client[db_name]
         
+        # FIXED: Your actual collection name
         forecast_collections = [
-            'timeseries_forecasts_3day',
+            'timeseries_forecasts_3day',  # Your actual collection
             'simple_forecasts'
         ]
         
@@ -476,7 +480,7 @@ def load_time_series_forecast():
                         except:
                             df['timestamp'] = df['date']
                     elif 'timestamp' in df.columns:
-                        df['date'] = df['timestamp'].dt.date
+                        df['date'] = pd.to_datetime(df['timestamp']).dt.date
                     
                     df = df.sort_values('timestamp')
                     df['source'] = 'Time Series'
@@ -496,7 +500,7 @@ def load_time_series_forecast():
 
 @st.cache_data(ttl=3600)
 def load_ensemble_forecast():
-    """Load ensemble forecasts"""
+    """FIXED: Load ensemble forecasts from correct collection"""
     try:
         from pymongo import MongoClient
         
@@ -509,6 +513,7 @@ def load_ensemble_forecast():
         client = MongoClient(uri)
         db = client[db_name]
         
+        # FIXED: Your actual collection name
         if 'ensemble_forecasts_3day' in db.list_collection_names():
             forecast_data = list(db.ensemble_forecasts_3day.find({}))
             if forecast_data:
@@ -534,7 +539,7 @@ def load_ensemble_forecast():
 # ==================== FIXED MODEL METRICS LOADING ====================
 @st.cache_data(ttl=3600)
 def load_model_metrics():
-    """Load model performance metrics - COMPLETELY FIXED"""
+    """FIXED: Load model performance metrics - reads from correct registry"""
     try:
         from pymongo import MongoClient
         
@@ -549,14 +554,9 @@ def load_model_metrics():
         
         metrics_data = []
         
-        # FIXED: Check ALL collections for models
-        collections = mr_db.list_collection_names()
-        
-        for collection_name in collections:
-            if not collection_name.startswith('models_') and collection_name != 'model_registry':
-                continue
-                
-            model_records = mr_db[collection_name].find({})
+        # FIXED: Only check the single model_registry collection (your actual structure)
+        if 'model_registry' in mr_db.list_collection_names():
+            model_records = mr_db['model_registry'].find({})
             
             for model in model_records:
                 metrics = model.get('metrics', {})
@@ -612,7 +612,7 @@ def load_model_metrics():
                     metrics_data.append({
                         'model_name': model.get('model_name', 'Unknown'),
                         'model_type': model.get('model_type', 'Unknown'),
-                        'collection': collection_name,
+                        'collection': 'model_registry',
                         'r2_score': float(r2_score),
                         'mae': float(mae) if mae is not None else None,
                         'rmse': float(rmse) if rmse is not None else None,
@@ -647,7 +647,7 @@ def load_model_metrics():
 # ==================== FIXED FEATURE IMPORTANCE FUNCTIONS ====================
 @st.cache_data(ttl=3600)
 def load_feature_importance():
-    """Load feature importance from the latest ACTUAL model"""
+    """FIXED: Load feature importance from the latest ACTUAL model"""
     try:
         from pymongo import MongoClient
         
@@ -660,7 +660,7 @@ def load_feature_importance():
         client = MongoClient(uri)
         mr_db = client[model_registry_db]
         
-        # FIXED: Find the ACTUAL latest model that is in production
+        # FIXED: Find the ACTUAL latest model from your registry
         latest_model = mr_db.model_registry.find_one(
             {'is_production': True},
             sort=[('created_at', -1)]
@@ -762,7 +762,6 @@ def get_current_production_model():
         return None
     except:
         return None
-
 # ==================== SIDEBAR ====================
 st.sidebar.title("🌫️ AQI Karachi Dashboard")
 
@@ -1199,7 +1198,6 @@ elif page == "📈 EDA Analysis":
     
     else:
         st.warning("No historical data available for EDA.")
-
 # ==================== FIXED FEATURE IMPORTANCE PAGE ====================
 elif page == "🎯 Feature Importance":
     st.markdown('<h1 class="main-header">🎯 Feature Importance Analysis</h1>', unsafe_allow_html=True)
@@ -2251,12 +2249,13 @@ elif page == "⚙️ System Status":
                 st.metric("Raw Data", f"{count} records")
             
             with col2:
-                count = db.aqi_features.count_documents({}) if 'aqi_features' in collections else 0
+                # FIXED: Check your actual feature collection
+                count = db.aqi_features_simple.count_documents({}) if 'aqi_features_simple' in collections else 0
                 st.metric("Features", f"{count} records")
             
             with col3:
                 model_registry_db = client['aqi_model_registry']
-                model_count = model_registry_db.model_registry.count_documents({})
+                model_count = model_registry_db.model_registry.count_documents({}) if 'model_registry' in model_registry_db.list_collection_names() else 0
                 st.metric("Models", f"{model_count} trained")
             
             st.markdown("### 🔮 Forecast Collections")
@@ -2264,14 +2263,17 @@ elif page == "⚙️ System Status":
             forecast_cols = st.columns(3)
             
             with forecast_cols[0]:
-                count = db.ml_forecasts_3day.count_documents({}) if 'ml_forecasts_3day' in collections else 0
+                # FIXED: Your actual ML forecast collection
+                count = db.ml_recursive_forecasts.count_documents({}) if 'ml_recursive_forecasts' in collections else 0
                 st.metric("ML Forecasts", f"{count}")
             
             with forecast_cols[1]:
+                # FIXED: Your actual time series collection
                 count = db.timeseries_forecasts_3day.count_documents({}) if 'timeseries_forecasts_3day' in collections else 0
                 st.metric("TS Forecasts", f"{count}")
             
             with forecast_cols[2]:
+                # FIXED: Your actual ensemble collection
                 count = db.ensemble_forecasts_3day.count_documents({}) if 'ensemble_forecasts_3day' in collections else 0
                 st.metric("Ensemble Forecasts", f"{count}")
             
