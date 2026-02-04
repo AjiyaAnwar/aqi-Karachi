@@ -154,7 +154,7 @@ jobs:
       run: |
         echo "🚀 Running predictions..."
         cd aqi-karachi
-        python model_training/runallmodels.py
+        python cicd/scripts/run_predictions.py
     
     - name: Execute Full Pipeline
       if: steps.determine_step.outputs.step == 'full'
