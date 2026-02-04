@@ -38,7 +38,7 @@ def check_model_registry():
         if 'model_registry' in mr_db.list_collection_names():
             # Count models with positive R²
             good_models = mr_db.model_registry.count_documents({
-                'metrics.r2_score': {'$gt': 0}
+                'metrics.test_r2': {'$gt': 0}
             })
             client.close()
             return good_models
@@ -66,6 +66,7 @@ def run_orchestrator():
             capture_output=True,
             text=True,
             cwd=project_root,
+            input="1\n",  # Option 1 for 3h recursive model
             timeout=600
         )
         
@@ -80,7 +81,7 @@ def run_orchestrator():
             # Show important lines
             for line in lines:
                 if any(keyword in line for keyword in 
-                       ['✅', '❌', 'R²:', 'MAE:', 'COMPLETED', 'FAILED']):
+                       ['✅', '❌', 'R²:', 'MAE:', 'COMPLETED', 'FAILED', 'forecast']):
                     print(f"  {line}")
             
             success = '✅ ORCHESTRATOR COMPLETED' in result.stdout
@@ -92,6 +93,8 @@ def run_orchestrator():
             return True
         else:
             print(f"❌ Orchestrator failed with code {result.returncode}")
+            if result.stderr:
+                print(f"Error: {result.stderr[:200]}")
             return False
             
     except Exception as e:
