@@ -64,11 +64,11 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install pymongo python-dotenv pandas numpy scikit-learn joblib
+        pip install cython numpy  # Install these first
+        pip install pymongo python-dotenv pandas scikit-learn joblib
         pip install streamlit plotly
         pip install xgboost
-        pip install pystan~=2.14
-        pip install prophet
+        pip install prophet  # This includes pystan automatically
         pip install requests
         pip install scipy
     
@@ -167,6 +167,32 @@ jobs:
         python data_pipeline/features.py
         echo "Step 3: Model Training & Predictions..."
         python model_training/runallmodels.py
+    
+    - name: Auto-generate forecasts if missing
+      if: steps.determine_step.outputs.step != 'skip'
+      run: |
+        echo "🔍 Checking if forecasts exist..."
+        cd aqi-karachi
+        python -c "
+        from pymongo import MongoClient
+        import os
+        from dotenv import load_dotenv
+        load_dotenv()
+        
+        client = MongoClient(os.getenv('MONGODB_URI'))
+        db = client[os.getenv('MONGODB_DATABASE', 'aqi_predictor')]
+        
+        # Check if any forecasts exist
+        forecast_collections = ['ensemble_forecasts_3day', 'ml_recursive_forecasts', 'timeseries_forecasts_3day']
+        has_forecasts = any(col in db.list_collection_names() and db[col].count_documents({}) > 0 for col in forecast_collections)
+        
+        if not has_forecasts:
+            print('⚠️ No forecasts found! Running predictions...')
+            import subprocess
+            subprocess.run(['python', 'model_training/runallmodels.py'])
+        else:
+            print('✅ Forecasts exist in database')
+        "
     
     - name: Summary
       run: |
