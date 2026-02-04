@@ -65,6 +65,12 @@ jobs:
       run: |
         python -m pip install --upgrade pip
         pip install pymongo python-dotenv pandas numpy scikit-learn joblib
+        pip install streamlit plotly
+        pip install xgboost
+        pip install pystan~=2.14
+        pip install prophet
+        pip install requests
+        pip install scipy
     
     - name: Determine pipeline step
       id: determine_step
@@ -115,19 +121,56 @@ jobs:
           echo "step=full" >> $GITHUB_OUTPUT
         fi
     
-    - name: Execute pipeline step
-      if: steps.determine_step.outputs.step != 'skip'
+    - name: Execute Data Collection (Incremental)
+      if: steps.determine_step.outputs.step == 'data_incremental'
       run: |
-        STEP="${{ steps.determine_step.outputs.step }}"
-        echo "🚀 Executing: $STEP"
-        
-        # Your execution logic here
-        echo "This would run: $STEP"
-        echo "✅ Step completed"
+        echo "🚀 Running incremental data collection..."
+        cd aqi-karachi
+        python data_pipeline/fetch_incremental.py
+    
+    - name: Execute Data Collection (Full)
+      if: steps.determine_step.outputs.step == 'data_full'
+      run: |
+        echo "🚀 Running full data collection..."
+        cd aqi-karachi
+        python data_pipeline/collect_historical.py
+    
+    - name: Execute Feature Engineering
+      if: steps.determine_step.outputs.step == 'features'
+      run: |
+        echo "🚀 Running feature engineering..."
+        cd aqi-karachi
+        python data_pipeline/features.py
+    
+    - name: Execute Model Training
+      if: steps.determine_step.outputs.step == 'train_combined'
+      run: |
+        echo "🚀 Running model training and predictions..."
+        cd aqi-karachi
+        python model_training/runallmodels.py
+    
+    - name: Execute Predictions Only
+      if: steps.determine_step.outputs.step == 'predictions'
+      run: |
+        echo "🚀 Running predictions..."
+        cd aqi-karachi
+        python model_training/runallmodels.py
+    
+    - name: Execute Full Pipeline
+      if: steps.determine_step.outputs.step == 'full'
+      run: |
+        echo "🚀 Running FULL pipeline..."
+        cd aqi-karachi
+        echo "Step 1: Data Collection..."
+        python data_pipeline/collect_historical.py
+        echo "Step 2: Feature Engineering..."
+        python data_pipeline/features.py
+        echo "Step 3: Model Training & Predictions..."
+        python model_training/runallmodels.py
     
     - name: Summary
       run: |
         echo "📊 PIPELINE SUMMARY"
-        echo "Step: ${{ steps.determine_step.outputs.step }}"
+        echo "Step executed: ${{ steps.determine_step.outputs.step }}"
         echo "Status: ${{ job.status }}"
         echo "Time Karachi: $(TZ='Asia/Karachi' date '+%Y-%m-%d %H:%M:%S %Z')"
