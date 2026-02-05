@@ -1600,7 +1600,6 @@ elif page == "📈 EDA Analysis":
                                   yaxis_title='AQI',
                                   height=400)
                 st.plotly_chart(fig1, use_container_width=True)
-        
         with tab6:
             st.markdown('<h1 class="sub-header">📋 EDA Summary Report</h1>', unsafe_allow_html=True)
             
@@ -1620,19 +1619,46 @@ elif page == "📈 EDA Analysis":
                 
                 st.markdown("### 💡 Key Insights")
                 insights = []
-                
-                if aqi_data.std() > 0:
-                    n = len(aqi_data)
-                    skew_val = ((aqi_data - aqi_data.mean())**3).sum() / (n * aqi_data.std()**3)
-                    if abs(skew_val) > 1:
-                        skew_direction = "right" if skew_val > 0 else "left"
-                        insights.append(f"📊 **Distribution**: AQI is highly skewed to the {skew_direction} (skewness = {skew_val:.2f})")
-                
-                for insight in insights:
-                    st.markdown(f"- {insight}")
-    
-    else:
-        st.warning("No historical data available for EDA.")
+
+                try:
+                    if not aqi_data.empty and len(aqi_data) > 1:
+                        # Simple insights that always work
+                        avg_aqi = aqi_data.mean()
+                        max_aqi = aqi_data.max()
+                        min_aqi = aqi_data.min()
+                        
+                        insights.append(f"📊 **Average AQI**: {avg_aqi:.1f} (Range: {min_aqi:.1f} to {max_aqi:.1f})")
+                        
+                        # Categorize
+                        if avg_aqi <= 50:
+                            insights.append(f"✅ **Overall Quality**: Good air quality on average")
+                        elif avg_aqi <= 100:
+                            insights.append(f"⚠️ **Overall Quality**: Moderate air quality on average")
+                        elif avg_aqi <= 150:
+                            insights.append(f"😷 **Overall Quality**: Unhealthy for sensitive groups on average")
+                        elif avg_aqi <= 200:
+                            insights.append(f"🤒 **Overall Quality**: Unhealthy air quality on average")
+                        else:
+                            insights.append(f"🏥 **Overall Quality**: Very unhealthy air quality on average")
+                        
+                        # Variability
+                        std_aqi = aqi_data.std()
+                        if std_aqi > 20:
+                            insights.append(f"📈 **Variability**: High day-to-day variation (std: {std_aqi:.1f})")
+                        elif std_aqi > 10:
+                            insights.append(f"📈 **Variability**: Moderate day-to-day variation (std: {std_aqi:.1f})")
+                        
+                        # Display
+                        for insight in insights:
+                            st.markdown(f"• {insight}")
+                    else:
+                        st.info("Not enough data for detailed insights")
+                except Exception as e:
+                    st.info(f"Could not generate insights: {str(e)[:50]}")
+            
+            else:  # This matches the if 'aqi' in hist_data.columns:
+                st.warning("No historical data available for EDA.")
+            
 # ==================== FIXED FEATURE IMPORTANCE PAGE ====================
 elif page == "🎯 Feature Importance":
     st.markdown('<h1 class="main-header">🎯 Feature Importance Analysis</h1>', unsafe_allow_html=True)
