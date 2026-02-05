@@ -11,8 +11,9 @@ from dotenv import load_dotenv
 import warnings
 warnings.filterwarnings('ignore')
 
-# Add project root to path
-project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# Add project root to path - FIXED PATH
+current_dir = os.path.dirname(os.path.abspath(__file__))
+project_root = os.path.dirname(current_dir)  # aqi-karachi directory
 sys.path.append(project_root)
 
 load_dotenv()
@@ -42,9 +43,10 @@ class FixedOrchestrator:
         
         if not os.path.exists(script_path):
             print(f"❌ Script not found: {script_path}")
-            return None
+            return False
         
         try:
+            print(f"📄 Running: {script_path}")
             result = subprocess.run(
                 [sys.executable, script_path],
                 capture_output=True,
@@ -54,15 +56,16 @@ class FixedOrchestrator:
             )
             
             # Print the output for debugging
-            print("Training script output:")
-            print(result.stdout[:1000])  # First 1000 chars
+            print("Training script output (first 500 chars):")
+            print(result.stdout[:500] if result.stdout else "No output")
             
             if result.returncode == 0:
                 print("✅ ML training completed")
                 return True
             else:
                 print(f"❌ ML training failed with code {result.returncode}")
-                print(f"Error: {result.stderr[-500:] if result.stderr else 'No error output'}")
+                if result.stderr:
+                    print(f"Error: {result.stderr[-200:]}")
                 return False
                 
         except subprocess.TimeoutExpired:
@@ -73,20 +76,25 @@ class FixedOrchestrator:
             return False
     
     def run_time_series(self):
-        """Run time series forecasting - FIXED FILE NAME"""
+        """Run time series forecasting - FIXED FILE PATH"""
         print("\n📈 RUNNING TIME SERIES FORECASTING")
         print("-" * 40)
         
-        # FIXED: Use correct file name
+        # FIXED: Use correct file path
         script_path = os.path.join(project_root, 'model_training', 'train_time_series_models.py')
         
         if not os.path.exists(script_path):
             print(f"❌ Time series script not found: {script_path}")
-            print("Looking for files:", os.listdir(os.path.join(project_root, 'model_training')))
+            print("📁 Looking for files in model_training directory:")
+            model_training_dir = os.path.join(project_root, 'model_training')
+            if os.path.exists(model_training_dir):
+                print(f"Files: {os.listdir(model_training_dir)}")
+            else:
+                print(f"Directory doesn't exist: {model_training_dir}")
             return False
         
         try:
-            print(f"Running: {script_path}")
+            print(f"📄 Running time series script: {os.path.basename(script_path)}")
             result = subprocess.run(
                 [sys.executable, script_path],
                 capture_output=True,
@@ -95,15 +103,20 @@ class FixedOrchestrator:
                 timeout=300
             )
             
-            print("Time series script output:")
-            print(result.stdout[:800])  # First 800 chars
+            print("Time series script output (first 500 chars):")
+            if result.stdout:
+                print(result.stdout[:500])
             
             if result.returncode == 0:
                 print("✅ Time series forecasting completed")
+                # Check if forecasts were actually created
+                ts_count = self.db.timeseries_forecasts_3day.count_documents({})
+                print(f"📊 Time series forecasts in DB: {ts_count}")
                 return True
             else:
                 print(f"❌ Time series failed with code {result.returncode}")
-                print(f"Error: {result.stderr[-500:] if result.stderr else 'No error output'}")
+                if result.stderr:
+                    print(f"Error: {result.stderr[-200:]}")
                 return False
                 
         except subprocess.TimeoutExpired:
@@ -115,32 +128,74 @@ class FixedOrchestrator:
             traceback.print_exc()
             return False
     
+    def check_time_series_forecasts(self):
+        """Check if time series forecasts exist and are fresh"""
+        try:
+            # Check for time series forecasts
+            ts_count = self.db.timeseries_forecasts_3day.count_documents({})
+            
+            if ts_count > 0:
+                # Check when they were created
+                latest_ts = self.db.timeseries_forecasts_3day.find_one(
+                    sort=[('created_at', -1)]
+                )
+                if latest_ts:
+                    created_at = latest_ts.get('created_at')
+                    if isinstance(created_at, str):
+                        created_at = datetime.fromisoformat(created_at.replace('Z', ''))
+                    
+                    age_hours = (datetime.now() - created_at).total_seconds() / 3600
+                    
+                    if age_hours < 24:
+                        print(f"✅ Time series forecasts exist ({ts_count} records, {age_hours:.1f} hours old)")
+                        return True
+                    else:
+                        print(f"⚠️ Time series forecasts are old ({age_hours:.1f} hours)")
+                        return False
+            
+            print(f"⚠️ No time series forecasts found or empty ({ts_count} records)")
+            return False
+            
+        except Exception as e:
+            print(f"❌ Error checking time series: {e}")
+            return False
+    
     def create_ensemble_forecasts(self):
-        """Create 3-DAY ensemble forecasts - IMPROVED"""
+        """Create 3-DAY ensemble forecasts"""
         print("\n⚖️ CREATING ENSEMBLE FORECASTS (3 DAYS)")
         print("-" * 40)
         
         try:
-            # Get ML recursive forecasts
-            ml_forecasts = list(self.db.ml_recursive_forecasts.find(
-                {}, 
-                {'_id': 0, 'date': 1, 'predicted_aqi': 1, 'timestamp': 1}
-            ))
+            # Check what forecasts we have
+            ml_count = self.db.ml_recursive_forecasts.count_documents({})
+            ts_count = self.db.timeseries_forecasts_3day.count_documents({})
             
-            # Get time series forecasts
-            ts_forecasts = list(self.db.timeseries_forecasts_3day.find(
-                {}, 
-                {'_id': 0, 'date': 1, 'predicted_aqi': 1, 'model_type': 1, 'timestamp': 1}
-            ))
+            print(f"📊 ML forecasts available: {ml_count}")
+            print(f"📊 Time series forecasts available: {ts_count}")
             
-            print(f"📊 ML forecasts found: {len(ml_forecasts)}")
-            print(f"📊 Time series forecasts found: {len(ts_forecasts)}")
-            
-            if not ml_forecasts and not ts_forecasts:
-                print("❌ No forecasts found from any model")
+            if ml_count == 0 and ts_count == 0:
+                print("❌ No forecasts available from any model")
                 return []
             
-            # Process ML forecasts (they might be hourly, convert to daily)
+            # Get ML forecasts
+            ml_forecasts = []
+            if ml_count > 0:
+                ml_forecasts = list(self.db.ml_recursive_forecasts.find(
+                    {}, 
+                    {'_id': 0, 'date': 1, 'predicted_aqi': 1, 'timestamp': 1}
+                ))
+                print(f"📅 ML forecasts loaded: {len(ml_forecasts)}")
+            
+            # Get time series forecasts
+            ts_forecasts = []
+            if ts_count > 0:
+                ts_forecasts = list(self.db.timeseries_forecasts_3day.find(
+                    {}, 
+                    {'_id': 0, 'date': 1, 'predicted_aqi': 1, 'model_type': 1, 'timestamp': 1}
+                ))
+                print(f"📅 Time series forecasts loaded: {len(ts_forecasts)}")
+            
+            # Process ML forecasts to get daily averages
             ml_daily = {}
             for forecast in ml_forecasts:
                 date_str = forecast.get('date')
@@ -148,16 +203,20 @@ class FixedOrchestrator:
                     # Extract date from timestamp
                     ts = forecast.get('timestamp')
                     if isinstance(ts, str):
-                        date_str = ts.split('T')[0]
+                        try:
+                            date_str = ts.split('T')[0]
+                        except:
+                            continue
                     elif hasattr(ts, 'date'):
                         date_str = ts.date().isoformat()
+                    else:
+                        continue
                 
-                if date_str:
-                    if date_str not in ml_daily:
-                        ml_daily[date_str] = []
-                    ml_daily[date_str].append(forecast.get('predicted_aqi', 0))
+                if date_str not in ml_daily:
+                    ml_daily[date_str] = []
+                ml_daily[date_str].append(forecast.get('predicted_aqi', 0))
             
-            # Process Time Series forecasts (already daily)
+            # Process Time Series forecasts
             ts_daily = {}
             for forecast in ts_forecasts:
                 date_str = forecast.get('date')
@@ -165,9 +224,6 @@ class FixedOrchestrator:
                     if date_str not in ts_daily:
                         ts_daily[date_str] = []
                     ts_daily[date_str].append(forecast.get('predicted_aqi', 0))
-            
-            print(f"📅 ML unique dates: {len(ml_daily)}")
-            print(f"📅 TS unique dates: {len(ts_daily)}")
             
             # Calculate daily averages
             ml_daily_avg = {}
@@ -177,6 +233,9 @@ class FixedOrchestrator:
             ts_daily_avg = {}
             for date_str, aqi_values in ts_daily.items():
                 ts_daily_avg[date_str] = sum(aqi_values) / len(aqi_values)
+            
+            print(f"📅 ML unique dates: {len(ml_daily_avg)}")
+            print(f"📅 TS unique dates: {len(ts_daily_avg)}")
             
             # Get next 3 dates starting from tomorrow
             today = datetime.now().date()
@@ -195,51 +254,71 @@ class FixedOrchestrator:
                 ml_aqi = ml_daily_avg.get(date_str)
                 ts_aqi = ts_daily_avg.get(date_str)
                 
+                print(f"\n📅 Processing {date_str}:")
+                print(f"   ML AQI: {ml_aqi}")
+                print(f"   TS AQI: {ts_aqi}")
+                
                 # Calculate ensemble AQI
                 ensemble_aqi = None
                 weights = ""
                 
                 if ml_aqi is not None and ts_aqi is not None:
-                    # Both available: 60% ML, 40% TS (adjusted)
+                    # Both available: 60% ML, 40% TS
                     ensemble_aqi = ml_aqi * 0.6 + ts_aqi * 0.4
                     weights = "ML:60%, TS:40%"
-                    print(f"  {date_str}: Using both models")
+                    print(f"   Using both models → {ensemble_aqi:.1f}")
                 elif ml_aqi is not None:
                     # Only ML available
                     ensemble_aqi = ml_aqi
                     weights = "ML:100%"
-                    print(f"  {date_str}: Using ML only")
+                    print(f"   Using ML only → {ensemble_aqi:.1f}")
                 elif ts_aqi is not None:
                     # Only TS available
                     ensemble_aqi = ts_aqi
                     weights = "TS:100%"
-                    print(f"  {date_str}: Using TS only")
+                    print(f"   Using TS only → {ensemble_aqi:.1f}")
                 else:
-                    # No data for this date, use fallback
-                    print(f"  {date_str}: No forecast, using fallback")
-                    # Simple fallback: average of last 3 days
-                    last_3_days = []
-                    for j in range(1, 4):
-                        past_date = (today - timedelta(days=j)).isoformat()
-                        if past_date in ml_daily_avg:
-                            last_3_days.append(ml_daily_avg[past_date])
-                        elif past_date in ts_daily_avg:
-                            last_3_days.append(ts_daily_avg[past_date])
+                    # No data for this date
+                    print(f"   No forecast available")
                     
-                    if last_3_days:
-                        ensemble_aqi = sum(last_3_days) / len(last_3_days)
-                        weights = "Fallback: historical average"
+                    # Try to get any forecast for this date (maybe from earlier runs)
+                    all_forecasts = self.db.ensemble_forecasts_3day.find_one(
+                        {'date': date_str},
+                        {'_id': 0, 'predicted_aqi': 1}
+                    )
+                    
+                    if all_forecasts and 'predicted_aqi' in all_forecasts:
+                        ensemble_aqi = all_forecasts['predicted_aqi']
+                        weights = "From previous run"
+                        print(f"   Using previous forecast → {ensemble_aqi}")
                     else:
-                        continue  # Skip this date
+                        # Skip this date
+                        print(f"   Skipping {date_str} - no forecast available")
+                        continue
                 
                 # Format date
                 forecast_date = datetime.strptime(date_str, '%Y-%m-%d')
                 day_name = forecast_date.strftime('%A')
                 
+                # Categorize AQI
+                if ensemble_aqi <= 50:
+                    category = "Good"
+                elif ensemble_aqi <= 100:
+                    category = "Moderate"
+                elif ensemble_aqi <= 150:
+                    category = "Unhealthy for Sensitive Groups"
+                elif ensemble_aqi <= 200:
+                    category = "Unhealthy"
+                elif ensemble_aqi <= 300:
+                    category = "Very Unhealthy"
+                else:
+                    category = "Hazardous"
+                
                 ensemble_data.append({
                     'date': date_str,
                     'day_name': day_name,
                     'predicted_aqi': round(float(ensemble_aqi), 1),
+                    'category': category,
                     'ml_aqi': round(float(ml_aqi), 1) if ml_aqi else None,
                     'ts_aqi': round(float(ts_aqi), 1) if ts_aqi else None,
                     'model': 'ensemble',
@@ -250,15 +329,19 @@ class FixedOrchestrator:
                 })
             
             # Save ensemble
-            self.db.ensemble_forecasts_3day.delete_many({})
             if ensemble_data:
+                self.db.ensemble_forecasts_3day.delete_many({})
                 self.db.ensemble_forecasts_3day.insert_many(ensemble_data)
                 print(f"\n✅ Created {len(ensemble_data)} ensemble forecasts:")
                 for forecast in ensemble_data:
                     print(f"   📅 {forecast['date']} ({forecast['day_name']}): "
-                          f"AQI {forecast['predicted_aqi']} ({forecast['weights']})")
+                          f"AQI {forecast['predicted_aqi']} - {forecast['category']} ({forecast['weights']})")
             else:
                 print("❌ No ensemble forecasts created")
+                # Try to keep existing forecasts
+                existing = self.db.ensemble_forecasts_3day.count_documents({})
+                if existing > 0:
+                    print(f"⚠️ Keeping existing {existing} ensemble forecasts")
             
             return ensemble_data
             
@@ -279,17 +362,21 @@ class FixedOrchestrator:
             'ensemble_forecasts_3day'
         ]
         
+        all_good = True
         for collection in collections_to_check:
             count = self.db[collection].count_documents({}) if collection in self.db.list_collection_names() else 0
-            print(f"  {collection}: {count} forecasts")
+            status = "✅" if count > 0 else "❌"
+            print(f"  {status} {collection}: {count} forecasts")
             
             if count > 0:
                 # Show first forecast
                 forecast = self.db[collection].find_one({}, {'_id': 0, 'date': 1, 'predicted_aqi': 1})
                 if forecast:
                     print(f"    Example: {forecast.get('date')} - AQI {forecast.get('predicted_aqi')}")
+            else:
+                all_good = False
         
-        return True
+        return all_good
     
     def run(self):
         """Main orchestrator"""
@@ -299,7 +386,7 @@ class FixedOrchestrator:
         
         start_time = datetime.now()
         
-        # 1. Train ML models (if needed)
+        # Check if we need to run ML training
         should_train = not self.check_recent_training()
         
         if should_train:
@@ -310,30 +397,33 @@ class FixedOrchestrator:
         else:
             print("✅ Using recently trained models")
         
-        # 2. Run time series forecasting
-        print("\n" + "=" * 70)
-        print("📈 TIME SERIES FORECASTING")
-        ts_success = self.run_time_series()
-        if not ts_success:
-            print("⚠️ Time series failed, using existing forecasts")
+        # Check if time series forecasts exist and are fresh
+        ts_fresh = self.check_time_series_forecasts()
         
-        # 3. Create ensemble forecasts
+        if not ts_fresh:
+            print("\n🔄 Running time series forecasting...")
+            ts_success = self.run_time_series()
+            if not ts_success:
+                print("⚠️ Time series failed, trying to use existing forecasts")
+        else:
+            print("\n✅ Using existing time series forecasts")
+        
+        # Create ensemble forecasts
         print("\n" + "=" * 70)
-        print("⚖️ ENSEMBLE CREATION")
         ensemble = self.create_ensemble_forecasts()
         
-        # 4. Verify everything
-        self.verify_forecasts_exist()
+        # Verify everything
+        print("\n" + "=" * 70)
+        all_good = self.verify_forecasts_exist()
         
         # Summary
         elapsed = (datetime.now() - start_time).total_seconds()
         
         print("\n" + "=" * 70)
-        print("✅ PIPELINE COMPLETED SUCCESSFULLY!")
+        print("✅ PIPELINE EXECUTION COMPLETE")
         print("=" * 70)
         print(f"Total time: {elapsed:.1f} seconds")
         
-        # Show final forecast summary
         if ensemble:
             print(f"\n🎯 3-DAY FORECAST FOR KARACHI:")
             print("-" * 40)
@@ -355,14 +445,14 @@ class FixedOrchestrator:
                     emoji = "☣️"
                 
                 print(f"  {forecast['date']} ({forecast['day_name']}): "
-                      f"AQI {aqi} {emoji} ({forecast['weights']})")
+                      f"AQI {aqi} {emoji} ({forecast['category']})")
         
         print(f"\n📊 Next steps:")
         print("  1. Refresh dashboard to see updated forecasts")
         print("  2. Check Model Performance for metrics")
         print("  3. Feature Importance shows model insights")
         
-        return True
+        return all_good
 
 def main():
     """Main function"""
@@ -376,7 +466,7 @@ def main():
         print("\n✅ Orchestrator completed successfully!")
         return 0
     else:
-        print("\n❌ Orchestrator failed!")
+        print("\n⚠️ Orchestrator completed with warnings")
         return 1
 
 if __name__ == "__main__":
