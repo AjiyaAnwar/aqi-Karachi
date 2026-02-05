@@ -1,16 +1,19 @@
 """
-features_simple.py - Simple CORRECT feature engineering with MongoDB versioning
+features_simple.py - Simple CORRECT feature engineering with proper imports
 """
 import pandas as pd
 import numpy as np
 from datetime import datetime
 import os
+import sys
 from dotenv import load_dotenv
 import warnings
 warnings.filterwarnings('ignore')
 
-# Import MongoDB Manager
-from cicd.mongodb_utils import MongoDBManager
+# Fix import path
+current_dir = os.path.dirname(os.path.abspath(__file__))
+project_root = os.path.dirname(current_dir)  # Go up one level from data_pipeline
+sys.path.append(project_root)
 
 load_dotenv()
 
@@ -19,24 +22,42 @@ def create_simple_features():
     print("🌫️ SIMPLE Feature Engineering (3h & 6h targets)")
     print("=" * 60)
     
-    # Initialize MongoDB Manager
-    mongo_manager = MongoDBManager()
-    mongo_manager.log_pipeline_step("feature_engineering", "started")
+    try:
+        # Try to import MongoDB Manager
+        from cicd.mongodb_utils import MongoDBManager
+        use_mongo_manager = True
+        print("✅ Using MongoDB Manager")
+    except ImportError as e:
+        print(f"⚠️ MongoDB Manager not found: {e}")
+        print("⚠️ Falling back to direct MongoDB connection")
+        use_mongo_manager = False
+        from pymongo import MongoClient
     
     try:
-        # Get raw data using manager
-        features_df = mongo_manager.get_latest_raw_data(limit_hours=168)  # Last 7 days
+        if use_mongo_manager:
+            mongo_manager = MongoDBManager()
+            mongo_manager.log_pipeline_step("feature_engineering", "started")
+            
+            # Get raw data using manager
+            features_df = mongo_manager.get_latest_raw_data(limit_hours=168)  # Last 7 days
+            
+            if features_df.empty:
+                print("⚠️ No data from MongoDB Manager, using direct connection")
+                use_mongo_manager = False
+        else:
+            features_df = pd.DataFrame()
         
-        if features_df.empty:
-            print("❌ No raw data found, using direct MongoDB connection")
+        if not use_mongo_manager:
             # Fallback to direct connection
-            from pymongo import MongoClient
-            client = MongoClient(os.getenv('MONGODB_URI'))
+            mongodb_uri = os.getenv('MONGODB_URI')
+            client = MongoClient(mongodb_uri)
             main_db = client['aqi_predictor']
+            
             cursor = list(main_db.aqi_measurements.find(
                 {}, 
                 {'_id': 0, 'timestamp': 1, 'aqi': 1, 'pm25': 1, 'pm10': 1}
             ).sort('timestamp', 1))
+            
             features_df = pd.DataFrame(cursor)
             client.close()
         
@@ -100,21 +121,44 @@ def create_simple_features():
         print(f"\n📊 Features shape: {features.shape}")
         print(f"📅 Date range: {features.index.min()} to {features.index.max()}")
         
-        # Save to Feature Store with versioning
-        version, feature_id = mongo_manager.store_features_with_versioning(
-            features_df=features.reset_index(),
-            description="Karachi AQI features with 3h/6h/24h targets",
-            is_training=True
-        )
+        # Save features
+        if use_mongo_manager:
+            # Save to Feature Store with versioning
+            version, feature_id = mongo_manager.store_features_with_versioning(
+                features_df=features.reset_index(),
+                description="Karachi AQI features with 3h/6h/24h targets",
+                is_training=True
+            )
+            
+            print(f"💾 Saved features version: {version}")
+            mongo_manager.log_pipeline_step("feature_engineering", "completed", {
+                "feature_count": len(features.columns),
+                "record_count": len(features),
+                "version": version
+            })
+        else:
+            # Fallback: Save directly to MongoDB
+            mongodb_uri = os.getenv('MONGODB_URI')
+            client = MongoClient(mongodb_uri)
+            fs_db = client['aqi_feature_store']
+            
+            # Clear old
+            if 'aqi_features_simple' in fs_db.list_collection_names():
+                fs_db['aqi_features_simple'].delete_many({})
+            
+            # Prepare records
+            records = features.reset_index().to_dict('records')
+            for record in records:
+                record['timestamp'] = record['timestamp'].isoformat()
+                record['created_at'] = datetime.now().isoformat()
+            
+            if records:
+                fs_db['aqi_features_simple'].insert_many(records)
+                print(f"💾 Saved {len(records)} records to 'aqi_features_simple'")
+            
+            client.close()
         
-        print(f"💾 Saved features version: {version}")
         print(f"📊 Total records: {len(features)}")
-        
-        mongo_manager.log_pipeline_step("feature_engineering", "completed", {
-            "feature_count": len(features.columns),
-            "record_count": len(features),
-            "version": version
-        })
         
         return features
         
@@ -122,7 +166,6 @@ def create_simple_features():
         print(f"❌ Error in feature engineering: {e}")
         import traceback
         traceback.print_exc()
-        mongo_manager.log_pipeline_step("feature_engineering", "failed", {"error": str(e)})
         return None
 
 if __name__ == "__main__":
