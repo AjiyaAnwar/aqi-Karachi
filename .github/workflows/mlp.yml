@@ -159,8 +159,11 @@ jobs:
         echo "🚀 Running FULL pipeline..."
         cd aqi-karachi
         export PYTHONPATH="$PYTHONPATH:$(pwd)"
+        echo "Step 1: Data Collection..."
         python data_pipeline/collect_historical.py
+        echo "Step 2: Feature Engineering..."
         python data_pipeline/features.py
+        echo "Step 3: Model Training & Predictions..."
         python model_training/runallmodels.py
     
     - name: Check AQI Alerts
@@ -196,6 +199,8 @@ jobs:
         python -c "
         from pymongo import MongoClient
         import os
+        from dotenv import load_dotenv
+        
         load_dotenv()
         
         client = MongoClient(os.getenv('MONGODB_URI'))
@@ -209,8 +214,11 @@ jobs:
             import subprocess
             try:
                 subprocess.run(['python', 'model_training/runallmodels.py'], check=True)
-            except:
-                print('❌ Failed to generate predictions')
+                print('✅ Predictions generated successfully')
+            except Exception as e:
+                print(f'❌ Failed to generate predictions: {e}')
+        else:
+            print('✅ Forecasts exist in database')
         "
     
     - name: Summary
