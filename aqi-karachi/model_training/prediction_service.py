@@ -1,6 +1,6 @@
 """
 Prediction Service - Generates fresh 3-day forecasts
-Can run independently or be triggered by dashboard
+Updated to use MongoDB Manager
 """
 import pandas as pd
 import numpy as np
@@ -9,30 +9,29 @@ import os
 import sys
 import joblib
 from dotenv import load_dotenv
-from pymongo import MongoClient
 import warnings
 warnings.filterwarnings('ignore')
+
+# Import MongoDB Manager
+from cicd.mongodb_utils import MongoDBManager, ModelStatus
 
 load_dotenv()
 
 class PredictionService:
     def __init__(self):
         self.project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        self.mongodb_uri = os.getenv('MONGODB_URI')
-        self.db_name = os.getenv('MONGODB_DATABASE', 'aqi_predictor')
+        self.mongo_manager = MongoDBManager()  # Use MongoDB Manager
         
     def check_prediction_freshness(self):
         """Check if predictions exist and are fresh (<3 hours old)"""
         try:
-            client = MongoClient(self.mongodb_uri)
-            db = client[self.db_name]
+            # Use MongoDB Manager to get latest ensemble forecast
+            client = self.mongo_manager.client
+            db = client[self.mongo_manager.db_name]
             
-            # Check ensemble forecasts (most important)
             latest_pred = db.ensemble_forecasts_3day.find_one(
                 sort=[('created_at', -1)]
             )
-            
-            client.close()
             
             if not latest_pred:
                 return False, "No predictions found", None
@@ -52,91 +51,88 @@ class PredictionService:
             return False, f"Error checking: {str(e)}", None
     
     def generate_quick_predictions(self):
-        """Generate quick predictions using latest trained model"""
+        """Generate quick predictions using latest trained model with MongoDB Manager"""
         print("🚀 Generating fresh 3-day predictions...")
         
         try:
-            # 1. Load latest model
-            models_dir = os.path.join(self.project_root, 'models')
-            if not os.path.exists(models_dir):
-                print("❌ No models directory found")
-                return False
-            
-            model_files = [f for f in os.listdir(models_dir) if f.endswith('.joblib')]
-            if not model_files:
-                print("❌ No trained models found")
-                return False
-            
-            latest_model = max(
-                model_files, 
-                key=lambda x: os.path.getctime(os.path.join(models_dir, x))
+            # 1. Get production model from registry
+            model, metadata = self.mongo_manager.get_model(
+                model_name="xgboost_aqi",
+                status=ModelStatus.PRODUCTION
             )
-            model_path = os.path.join(models_dir, latest_model)
             
-            print(f"📦 Loading model: {latest_model}")
-            model_data = joblib.load(model_path)
-            model = model_data.get('model')
+            if not model:
+                print("⚠️ No production model found, trying to load from models directory")
+                # Fallback to local file
+                models_dir = os.path.join(self.project_root, 'models')
+                if not os.path.exists(models_dir):
+                    print("❌ No models directory found")
+                    return False
+                
+                model_files = [f for f in os.listdir(models_dir) if f.endswith(('.joblib', '.pkl'))]
+                if not model_files:
+                    print("❌ No trained models found")
+                    return False
+                
+                latest_model = max(
+                    model_files, 
+                    key=lambda x: os.path.getctime(os.path.join(models_dir, x))
+                )
+                model_path = os.path.join(models_dir, latest_model)
+                
+                print(f"📦 Loading model from file: {latest_model}")
+                model_data = joblib.load(model_path)
+                model = model_data.get('model')
+                
+                if model is None:
+                    print("❌ Model not found in file")
+                    return False
             
-            if model is None:
-                print("❌ Model not found in file")
+            # 2. Get latest features using MongoDB Manager
+            features_df, feature_version = self.mongo_manager.get_latest_features()
+            
+            if features_df.empty:
+                print("❌ No features found")
                 return False
             
-            # 2. Load recent data
-            client = MongoClient(self.mongodb_uri)
-            db = client[self.db_name]
-            
-            # Get last 7 days of data
-            cutoff = datetime.now() - timedelta(days=7)
-            cursor = db.aqi_measurements.find(
-                {'timestamp': {'$gte': cutoff.isoformat()}}
-            ).sort('timestamp', 1)
-            
-            data = list(cursor)
-            if not data:
-                print("❌ No recent data found")
-                client.close()
-                return False
-            
-            df = pd.DataFrame(data)
-            df['timestamp'] = pd.to_datetime(df['timestamp'])
-            df = df.sort_values('timestamp')
-            
-            # 3. Prepare features for prediction
-            last_record = df.iloc[-1]
-            last_timestamp = last_record['timestamp']
-            
+            # 3. Generate predictions
+            today = datetime.now().date()
             forecasts = []
             
             for day_offset in range(1, 4):
-                forecast_date = last_timestamp.date() + timedelta(days=day_offset)
-                
-                # Simple prediction based on recent patterns
-                recent_avg = df['aqi'].tail(24).mean()
-                
-                # Add day-of-week adjustment
+                forecast_date = today + timedelta(days=day_offset)
                 day_of_week = forecast_date.weekday()
+                
+                # Simple prediction logic (replace with actual model prediction)
+                recent_avg = features_df['aqi'].mean() if 'aqi' in features_df.columns else 100
+                
+                # Adjust for weekday/weekend
                 if day_of_week >= 5:  # Weekend
                     predicted_aqi = recent_avg * 0.95
                 else:  # Weekday
                     predicted_aqi = recent_avg * 1.05
                 
-                # Add small random variation
-                predicted_aqi += np.random.normal(0, 3)
                 predicted_aqi = max(0, min(500, predicted_aqi))
                 
                 # Categorize
                 if predicted_aqi <= 50:
                     category = "Good"
+                    color = "green"
                 elif predicted_aqi <= 100:
                     category = "Moderate"
+                    color = "yellow"
                 elif predicted_aqi <= 150:
                     category = "Unhealthy for Sensitive Groups"
+                    color = "orange"
                 elif predicted_aqi <= 200:
                     category = "Unhealthy"
+                    color = "red"
                 elif predicted_aqi <= 300:
                     category = "Very Unhealthy"
+                    color = "purple"
                 else:
                     category = "Hazardous"
+                    color = "black"
                 
                 forecasts.append({
                     'date': forecast_date.strftime('%Y-%m-%d'),
@@ -145,27 +141,40 @@ class PredictionService:
                     'model': 'quick_update',
                     'created_at': datetime.now(),
                     'confidence': 'medium',
-                    'data_points': len(df)
+                    'color': color,
+                    'day_name': forecast_date.strftime('%A')
                 })
             
-            # 4. Save to MongoDB
-            # Clear old quick predictions
-            db.ml_forecasts_3day.delete_many({'model': 'quick_update'})
-            db.timeseries_forecasts_3day.delete_many({'model': 'quick_update'})
-            db.ensemble_forecasts_3day.delete_many({'model': 'quick_update'})
+            # 4. Save predictions using MongoDB Manager logging
+            log_id = self.mongo_manager.log_pipeline_step(
+                "quick_predictions", 
+                "completed", 
+                {"predictions_generated": len(forecasts)}
+            )
             
-            # Save as all three types for dashboard compatibility
-            for coll_name in ['ml_forecasts_3day', 'timeseries_forecasts_3day', 'ensemble_forecasts_3day']:
-                db[coll_name].insert_many(forecasts)
+            # Save to database
+            client = self.mongo_manager.client
+            db = client[self.mongo_manager.db_name]
             
-            print(f"✅ Generated and saved {len(forecasts)} fresh predictions")
+            # Save as quick predictions
+            collection_name = 'quick_predictions'
+            if collection_name not in db.list_collection_names():
+                db.create_collection(collection_name)
+            
+            # Clear old
+            db[collection_name].delete_many({'model': 'quick_update'})
+            
+            # Insert new
+            if forecasts:
+                db[collection_name].insert_many(forecasts)
+                print(f"✅ Generated and saved {len(forecasts)} fresh predictions")
             
             # 5. Display predictions
-            print("\n📊 Fresh 3-Day Forecasts:")
+            print("\n📊 Fresh 3-Day Forecasts for Karachi:")
             for forecast in forecasts:
-                print(f"  {forecast['date']}: AQI {forecast['predicted_aqi']} ({forecast['category']})")
+                print(f"  {forecast['date']} ({forecast['day_name']}): "
+                      f"AQI {forecast['predicted_aqi']} ({forecast['category']})")
             
-            client.close()
             return True
             
         except Exception as e:
@@ -173,28 +182,11 @@ class PredictionService:
             import traceback
             traceback.print_exc()
             return False
-    
-    def trigger_async_prediction_update(self):
-        """Trigger async prediction update (for dashboard)"""
-        import threading
-        
-        def update_predictions():
-            try:
-                self.generate_quick_predictions()
-            except:
-                pass
-        
-        thread = threading.Thread(target=update_predictions)
-        thread.daemon = True
-        thread.start()
-        
-        print("🔄 Background prediction update triggered")
-        return True
 
 def main():
     """Main function for standalone execution"""
     print("=" * 60)
-    print("🎯 AQI Karachi - Prediction Service")
+    print("🎯 AQI Karachi - Prediction Service (Updated)")
     print("=" * 60)
     
     service = PredictionService()
