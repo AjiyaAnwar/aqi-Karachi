@@ -567,7 +567,7 @@ def load_model_metrics():
 # ==================== FIXED MODEL METRICS LOADING ====================
 @st.cache_data(ttl=3600)
 def load_model_metrics():
-    """Load model performance metrics - COMPLETELY FIXED"""
+    """Load model performance metrics - UPDATED for new MongoDB structure"""
     try:
         from pymongo import MongoClient
         
@@ -575,105 +575,62 @@ def load_model_metrics():
         if not uri:
             return pd.DataFrame()
             
-        model_registry_db = os.getenv("MODEL_REGISTRY_DATABASE", "aqi_model_registry")
+        # UPDATED: Use correct DB names
+        model_registry_db = "aqi_model_registry"  # From YML env
         client = MongoClient(uri)
         mr_db = client[model_registry_db]
         
         metrics_data = []
         
-        # FIXED: Check ALL collections for models
-        collections = mr_db.list_collection_names()
+        # UPDATED: Check new collections from MongoDB Manager
+        collections_to_check = ['models', 'model_metadata', 'model_registry']
         
-        for collection_name in collections:
-            if not collection_name.startswith('models_') and collection_name != 'model_registry':
-                continue
-                
-            model_records = mr_db[collection_name].find({})
-            for model in model_records:
-                metrics = model.get('metrics', {})
-                
-                # Extract R² with validation
-                r2_score = None
-                
-                # Try all possible R² keys
-                r2_keys = ['test_r2', 'r2_score', 'test_r2_score', 'r2', 'R2']
-                for key in r2_keys:
-                    if key in metrics:
-                        try:
-                            r2_val = float(metrics[key])
-                            # VALIDATION: R² must be between -1 and 1
-                            if -1 <= r2_val <= 1:
-                                r2_score = r2_val
-                                break
-                            elif r2_val > 1:
-                                # If R² > 1, it's wrong - cap it to 0.99
-                                print(f"WARNING: Invalid R² {r2_val} in model {model.get('model_name')}")
-                                r2_score = 0.99
-                                break
-                        except:
-                            continue
-                
-                # Only add if we have valid R²
-                if r2_score is not None:
-                    created_at = model.get('created_at', datetime.now())
-                    created_at = ensure_datetime(created_at)
-                      # Extract MAE
-                    mae = None
-                    mae_keys = ['test_mae', 'mae', 'mean_absolute_error']
-                    for key in mae_keys:
-                        if key in metrics:
+        for collection_name in collections_to_check:
+            if collection_name in mr_db.list_collection_names():
+                model_records = mr_db[collection_name].find({})
+                for model in model_records:
+                    # UPDATED: Handle new structure
+                    metrics = model.get('metrics', {})
+                    performance = model.get('performance', {})
+                    
+                    # Combine metrics sources
+                    all_metrics = {**metrics, **performance}
+                    
+                    # Extract R² from either location
+                    r2_score = None
+                    r2_sources = ['test_r2', 'r2_score', 'test_r2_score', 'r2', 'R2', 'score']
+                    
+                    for key in r2_sources:
+                        if key in all_metrics:
                             try:
-                                mae = float(metrics[key])
-                                break
+                                r2_val = float(all_metrics[key])
+                                if -1 <= r2_val <= 1:
+                                    r2_score = r2_val
+                                    break
                             except:
                                 continue
                     
-                    # Extract RMSE
-                    rmse = None
-                    rmse_keys = ['test_rmse', 'rmse', 'root_mean_squared_error']
-                    for key in rmse_keys:
-                         if key in metrics:
-                            try:
-                                rmse = float(metrics[key])
-                                break
-                            except:
-                                continue
-                    
-                    metrics_data.append({
-                        'model_name': model.get('model_name', 'Unknown'),
-                        'model_type': model.get('model_type', 'Unknown'),
-                        'collection': collection_name,
-                        'r2_score': float(r2_score),
-                        'mae': float(mae) if mae is not None else None,
-                        'rmse': float(rmse) if rmse is not None else None,
-                        'created_at': created_at,
-                        'is_production': model.get('is_production', False),
-                        'strategy': model.get('strategy', model.get('purpose', '')),
-                        'horizon': model.get('horizon', ''),
-                        'features_count': len(model.get('features', [])) if 'features' in model else 0
-                    })
-        
-        client.close()
-        
-        if metrics_data:
-            df = pd.DataFrame(metrics_data)
-            df['created_at'] = pd.to_datetime(df['created_at'])
-            
-            # Remove duplicates (keep latest)
-            df = df.sort_values(['model_name', 'created_at'], ascending=[True, False])
-            df = df.drop_duplicates(subset=['model_name'], keep='first')
-            # Sort by R² (descending)
-            df = df.sort_values('r2_score', ascending=False)
-            
-            return df
-        else:
-            return pd.DataFrame()
-        
-    except Exception as e:
-        print(f"Error in load_model_metrics: {e}")
-        return pd.DataFrame()
+                    if r2_score is not None:
+                        # Get model info with fallbacks
+                        model_name = model.get('model_name', model.get('model_id', 'Unknown'))
+                        model_type = model.get('model_type', 'Unknown')
+                        status = model.get('status', model.get('is_production', False))
+                        created_at = model.get('created_at', model.get('timestamp', datetime.now()))
+                        
+                        metrics_data.append({
+                            'model_name': model_name,
+                            'model_type': model_type,
+                            'collection': collection_name,
+                            'r2_score': float(r2_score),
+                            'mae': float(all_metrics.get('mae', all_metrics.get('test_mae', 0))),
+                            'rmse': float(all_metrics.get('rmse', all_metrics.get('test_rmse', 0))),
+                            'created_at': ensure_datetime(created_at),
+                            'is_production': status in ['production', True, 'Production'],
+                            'strategy': model.get('strategy', model.get('purpose', '')),
+                            'horizon': model.get('horizon', ''),
+                            'features_count': len(model.get('features', model.get('features_list', [])))
+                        })
 # ==================== FIXED FEATURE IMPORTANCE FUNCTIONS ====================
-@st.cache_data(ttl=3600)
 def load_feature_importance():
     """Load feature importance from the latest ACTUAL model"""
     try:
@@ -683,23 +640,36 @@ def load_feature_importance():
         if not uri:
             return None
             
-        model_registry_db = os.getenv("MODEL_REGISTRY_DATABASE", "aqi_model_registry")
+        # UPDATED: Use the correct DB name from our YML
+        model_registry_db = "aqi_model_registry"  # Hardcode since that's what YML uses
         client = MongoClient(uri)
         mr_db = client[model_registry_db]
         
-        # FIXED: Find the ACTUAL latest model that is in production
-        latest_model = mr_db.model_registry.find_one(
-            {'is_production': True},
-            sort=[('created_at', -1)]
-        )
+        # UPDATED: Check multiple collections
+        latest_model = None
         
-        # If no production model, get the latest overall
-        if not latest_model:
+        # Try 'models' collection first (new MongoDB Manager uses this)
+        if 'models' in mr_db.list_collection_names():
+            latest_model = mr_db.models.find_one(
+                {'status': 'production'},
+                sort=[('timestamp', -1)]
+            )
+        
+        # Fallback to 'model_registry'
+        if not latest_model and 'model_registry' in mr_db.list_collection_names():
             latest_model = mr_db.model_registry.find_one(
+                {'is_production': True},
                 sort=[('created_at', -1)]
             )
-            if not latest_model:
-             client.close()
+        
+        # Fallback: Get any model
+        if not latest_model:
+            if 'models' in mr_db.list_collection_names():
+                latest_model = mr_db.models.find_one(sort=[('timestamp', -1)])
+            elif 'model_registry' in mr_db.list_collection_names():
+                latest_model = mr_db.model_registry.find_one(sort=[('created_at', -1)])
+        
+        if not latest_model:
             return None
         
         # Get features
@@ -714,7 +684,8 @@ def load_feature_importance():
             feature_importance = latest_model['feature_importance']
         elif 'feature_importance' in metrics:
             feature_importance = metrics['feature_importance']
-               # If no feature importance, create synthetic based on model type
+        
+        # If no feature importance, create synthetic based on model type
         if not feature_importance and features:
             # Common patterns for AQI models
             synthetic_importance = {
@@ -752,20 +723,22 @@ def load_feature_importance():
             importance_df = pd.DataFrame(importance_data)
             importance_df = importance_df.sort_values('importance', ascending=False)
             
-            client.close()
+            # Get model info
+            model_name = latest_model.get('model_name', latest_model.get('model_id', 'Unknown'))
+            strategy = latest_model.get('strategy', '3h Recursive')
+            status = latest_model.get('status', latest_model.get('is_production', False))
             
             return {
                 'model_info': latest_model,
                 'features': features,
                 'importance_df': importance_df,
                 'metrics': metrics,
-                'strategy': latest_model.get('strategy', '3h Recursive'),
-                 'model_name': latest_model.get('model_name', 'AQI_3h_Recursive_Model'),
-                'is_production': latest_model.get('is_production', False),
-                'note': 'Feature importance from actual production model' if latest_model.get('is_production') else 'Feature importance based on model patterns'
+                'strategy': strategy,
+                'model_name': model_name,
+                'is_production': status in ['production', True, 'Production'],
+                'note': 'Feature importance from actual production model' if status in ['production', True, 'Production'] else 'Feature importance based on model patterns'
             }
         
-        client.close()
         return None
         
     except Exception as e:
@@ -1129,11 +1102,18 @@ st.sidebar.markdown("---")
 st.sidebar.info("**Karachi AQI Prediction System**\n\nReal-time air quality forecasting using 45-day Open-Meteo data.")
 
 # Footer with refresh info
+# Footer with refresh info
 if auto_refresh:
-    refresh_in = 300 - (time.time() % 300)
-    st.sidebar.markdown(f"---")
+    # Calculate based on session state
+    refresh_in = 300 - (time.time() - st.session_state.last_refresh.timestamp()) % 300
+    st.sidebar.markdown("---")
     st.sidebar.markdown(f"🔄 Auto-refresh in {int(refresh_in)}s")
-
+    
+    # Auto-trigger refresh
+    if refresh_in < 10:
+        st.sidebar.markdown("🔄 Refreshing...")
+        time.sleep(2)
+        st.rerun()
 # ==================== HOME PAGE ====================
 if page == "🏠 Home":
     st.markdown('<h1 class="main-header">🌫️ AQI Karachi - Air Quality Prediction System</h1>', unsafe_allow_html=True)
@@ -1211,19 +1191,27 @@ if page == "🏠 Home":
             st.metric("Max AQI", f"{max_aqi:.0f}")
         else:
             st.metric("Max AQI", "N/A")
-    
     with col4:
-        metrics_data = load_model_metrics()
-        if not metrics_data.empty:
-            valid_r2 = metrics_data['r2_score'][metrics_data['r2_score'].between(-1, 1)]
-            if not valid_r2.empty:
-                best_r2 = valid_r2.max()
-                st.metric("Best R²", f"{best_r2:.3f}")
-            else:
-                st.metric("Best R²", "N/A")
+    metrics_data = load_model_metrics()
+    if not metrics_data.empty:
+        # Filter valid R² scores
+        valid_r2 = []
+        for score in metrics_data['r2_score']:
+            try:
+                score_val = float(score)
+                if -1 <= score_val <= 1:
+                    valid_r2.append(score_val)
+            except:
+                continue
+        
+        if valid_r2:
+            best_r2 = max(valid_r2)
+            st.metric("Best R²", f"{best_r2:.3f}")
         else:
             st.metric("Best R²", "N/A")
-    
+    else:
+        st.metric("Best R²", "N/A")
+
     # Current production model
     current_model = get_current_production_model()
     if current_model is not None:
@@ -1247,10 +1235,13 @@ if page == "🏠 Home":
         - **❌ Outdated (>12 hours)**: Predictions are too old
         
         **Automatic Updates:**
-        - Data collection: Every 3 hours
-        - Model training: Twice daily (3 AM & 3 PM)
+        - Feature Engineering: **Every hour** (as required)
+        - Data Collection: Every 3 hours
+        - Model Training: **Daily at 2 AM UTC**
         - Predictions: Every 3 hours
         - Dashboard: Auto-refreshes every 5 minutes
+        - Full Pipeline: **Every Sunday at 5 AM UTC**
+    
         """)
 
 # ==================== CURRENT AQI PAGE ====================
@@ -2380,13 +2371,12 @@ def show_forecast_health_recommendations(df):
                 st.markdown(f"• {precaution}")
 
 # ==================== FOOTER ====================
-st.markdown("---")
 st.markdown(
     """
     <div style='text-align: center'>
         <p>🌫️ AQI Karachi Prediction System | 
         Dashboard: {}</p>
-        <p><small>Predictions updated every 3 hours | Data collected hourly | Models trained twice daily | Auto-refresh every 5 minutes</small></p>
+        <p><small>Feature updates: Hourly | Data: Every 3h | Training: Daily 2AM UTC | Refresh: Every 5 min</small></p>
     </div>
     """.format(datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
     unsafe_allow_html=True
