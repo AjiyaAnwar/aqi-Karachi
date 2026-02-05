@@ -1,22 +1,19 @@
 name: AQI Karachi ML Pipeline - PRODUCTION
 
 on:
-  # ========== SCHEDULED RUNS ==========
   schedule:
-    # Data collection every 3 hours
+    # Hourly feature updates (as required)
+    - cron: '0 */1 * * *'
+    
+    # 3-hourly data collection
     - cron: '0 */3 * * *'
     
-    # Feature engineering daily at 1 AM UTC
-    - cron: '0 1 * * *'
+    # Daily training
+    - cron: '0 2 * * *'    # Daily at 2 AM UTC
     
-    # Training twice daily (4 AM & 4 PM UTC)
-    - cron: '0 4 * * *'
-    - cron: '0 16 * * *'
-    
-    # Full pipeline every Sunday at 5 AM UTC
-    - cron: '0 5 * * 0'
+    # Weekly full pipeline
+    - cron: '0 5 * * 0'    # Sunday at 5 AM UTC
   
-  # ========== MANUAL TRIGGER ==========
   workflow_dispatch:
     inputs:
       pipeline_step:
@@ -30,9 +27,9 @@ on:
           - features
           - train_combined
           - predictions
+          - alerts_check
           - full
   
-  # ========== CODE PUSH TRIGGER ==========
   push:
     branches: [main]
     paths:
@@ -42,15 +39,22 @@ on:
 jobs:
   execute-pipeline:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
     
     env:
       MONGODB_URI: ${{ secrets.MONGODB_URI }}
+      MONGODB_DATABASE: aqi_predictor
+      FEATURE_STORE_DB: aqi_feature_store
+      MODEL_REGISTRY_DB: aqi_model_registry
+      LOGS_DB: aqi_pipeline_logs
+      
       CITY_NAME: Karachi
       CITY_LAT: 24.8607
       CITY_LON: 67.0011
       TIMEZONE: Asia/Karachi
+      
       GITHUB_ACTIONS: true
+      PYTHONPATH: ${{ github.workspace }}/aqi-karachi:${{ github.workspace }}
     
     steps:
     - name: Checkout repository
@@ -64,13 +68,13 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install cython numpy  # Install these first
         pip install pymongo python-dotenv pandas scikit-learn joblib
         pip install streamlit plotly
         pip install xgboost
-        pip install prophet  # This includes pystan automatically
+        pip install prophet
         pip install requests
         pip install scipy
+        echo "✅ Dependencies installed"
     
     - name: Determine pipeline step
       id: determine_step
@@ -86,32 +90,28 @@ jobs:
           HOUR=$(date -u +%H)
           DAY=$(date -u +%u)
           
-          echo "Scheduled trigger, UTC Hour: $HOUR, Day: $DAY"
-          
           case $HOUR in
-            "00"|"03"|"06"|"09"|"12"|"15"|"18"|"21")
-              echo "Running incremental data collection"
-              echo "step=data_incremental" >> $GITHUB_OUTPUT
-              ;;
-            "01")
-              echo "Running feature engineering"
+            "00"|"01"|"02"|"03"|"04"|"05"|"06"|"07"|"08"|"09"|"10"|"11"|"12"|"13"|"14"|"15"|"16"|"17"|"18"|"19"|"20"|"21"|"22"|"23")
+              echo "Running hourly feature engineering"
               echo "step=features" >> $GITHUB_OUTPUT
               ;;
-            "04"|"16")
-              echo "Running combined training"
+            "02")
+              echo "Running daily training"
               echo "step=train_combined" >> $GITHUB_OUTPUT
+              ;;
+            "03"|"06"|"09"|"12"|"15"|"18"|"21")
+              echo "Running incremental data collection"
+              echo "step=data_incremental" >> $GITHUB_OUTPUT
               ;;
             "05")
               if [[ $DAY -eq 7 ]]; then
                 echo "Running full pipeline (Sunday)"
                 echo "step=full" >> $GITHUB_OUTPUT
               else
-                echo "Skipping (not Sunday)"
                 echo "step=skip" >> $GITHUB_OUTPUT
               fi
               ;;
             *)
-              echo "No scheduled task"
               echo "step=skip" >> $GITHUB_OUTPUT
               ;;
           esac
@@ -126,6 +126,7 @@ jobs:
       run: |
         echo "🚀 Running incremental data collection..."
         cd aqi-karachi
+        export PYTHONPATH="$PYTHONPATH:$(pwd)"
         python data_pipeline/fetch_incremental.py
     
     - name: Execute Data Collection (Full)
@@ -133,13 +134,15 @@ jobs:
       run: |
         echo "🚀 Running full data collection..."
         cd aqi-karachi
+        export PYTHONPATH="$PYTHONPATH:$(pwd)"
         python data_pipeline/collect_historical.py
     
-    - name: Execute Feature Engineering
+    - name: Execute Feature Engineering (Hourly)
       if: steps.determine_step.outputs.step == 'features'
       run: |
-        echo "🚀 Running feature engineering..."
+        echo "🚀 Running hourly feature engineering..."
         cd aqi-karachi
+        export PYTHONPATH="$PYTHONPATH:$(pwd)"
         python data_pipeline/features.py
     
     - name: Execute Model Training
@@ -147,20 +150,15 @@ jobs:
       run: |
         echo "🚀 Running model training and predictions..."
         cd aqi-karachi
+        export PYTHONPATH="$PYTHONPATH:$(pwd)"
         python model_training/runallmodels.py
-    
-    - name: Execute Predictions Only
-      if: steps.determine_step.outputs.step == 'predictions'
-      run: |
-        echo "🚀 Running predictions..."
-        cd aqi-karachi
-        python cicd/scripts/run_predictions.py
     
     - name: Execute Full Pipeline
       if: steps.determine_step.outputs.step == 'full'
       run: |
         echo "🚀 Running FULL pipeline..."
         cd aqi-karachi
+        export PYTHONPATH="$PYTHONPATH:$(pwd)"
         echo "Step 1: Data Collection..."
         python data_pipeline/collect_historical.py
         echo "Step 2: Feature Engineering..."
@@ -168,11 +166,12 @@ jobs:
         echo "Step 3: Model Training & Predictions..."
         python model_training/runallmodels.py
     
-    - name: Auto-generate forecasts if missing
-      if: steps.determine_step.outputs.step != 'skip'
+    - name: Check AQI Alerts
+      if: steps.determine_step.outputs.step == 'alerts_check' || steps.determine_step.outputs.step == 'full'
       run: |
-        echo "🔍 Checking if forecasts exist..."
+        echo "🚨 Checking for hazardous AQI levels..."
         cd aqi-karachi
+        export PYTHONPATH="$PYTHONPATH:$(pwd)"
         python -c "
         from pymongo import MongoClient
         import os
@@ -182,14 +181,42 @@ jobs:
         client = MongoClient(os.getenv('MONGODB_URI'))
         db = client[os.getenv('MONGODB_DATABASE', 'aqi_predictor')]
         
-        # Check if any forecasts exist
+        latest_aqi = db.aqi_measurements.find_one(sort=[('timestamp', -1)])
+        if latest_aqi:
+            current_aqi = latest_aqi.get('aqi', 0)
+            if current_aqi > 300:
+                print('🚨🚨🚨 HAZARDOUS AQI LEVEL! Immediate action required!')
+            elif current_aqi > 200:
+                print('⚠️⚠️ VERY UNHEALTHY AQI! Sensitive groups avoid outdoors.')
+        "
+    
+    - name: Auto-generate forecasts if missing
+      if: steps.determine_step.outputs.step != 'skip'
+      run: |
+        echo "🔍 Checking if forecasts exist..."
+        cd aqi-karachi
+        export PYTHONPATH="$PYTHONPATH:$(pwd)"
+        python -c "
+        from pymongo import MongoClient
+        import os
+        from dotenv import load_dotenv
+        
+        load_dotenv()
+        
+        client = MongoClient(os.getenv('MONGODB_URI'))
+        db = client[os.getenv('MONGODB_DATABASE', 'aqi_predictor')]
+        
         forecast_collections = ['ensemble_forecasts_3day', 'ml_recursive_forecasts', 'timeseries_forecasts_3day']
         has_forecasts = any(col in db.list_collection_names() and db[col].count_documents({}) > 0 for col in forecast_collections)
         
         if not has_forecasts:
             print('⚠️ No forecasts found! Running predictions...')
             import subprocess
-            subprocess.run(['python', 'model_training/runallmodels.py'])
+            try:
+                subprocess.run(['python', 'model_training/runallmodels.py'], check=True)
+                print('✅ Predictions generated successfully')
+            except Exception as e:
+                print(f'❌ Failed to generate predictions: {e}')
         else:
             print('✅ Forecasts exist in database')
         "
