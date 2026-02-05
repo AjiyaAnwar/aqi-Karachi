@@ -174,7 +174,7 @@ def fetch_incremental_data(hours_back=6):
         
         # Also update features collection
         
-        print(f"✅ Updated features collection with {len(features_result.inserted_ids)} records")
+        print(f"✅ Updated aqi_measurements collection with {len(result.inserted_ids)} records")
         
         # Calculate statistics
         new_aqi_stats = [doc['aqi'] for doc in new_documents if doc['aqi'] > 0]
