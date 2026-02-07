@@ -1,4 +1,4 @@
-name: AQI Karachi ML Pipeline - PRODUCTION 
+name: AQI Karachi ML Pipeline - PRODUCTION ENHANCED
 
 on:
   schedule:
@@ -271,7 +271,7 @@ jobs:
                 print('⚠️⚠️ VERY UNHEALTHY AQI! Sensitive groups avoid outdoors.')
         "
     
-    - name: Auto-generate forecasts if missing
+    - name: Auto-generate forecasts if missing - FIXED
       if: steps.determine_step.outputs.step != 'skip'
       run: |
         echo "🔍 Checking if forecasts exist..."
@@ -296,9 +296,24 @@ jobs:
                 # Check if forecasts are recent (less than 4 hours old)
                 latest = db[col].find_one(sort=[('created_at', -1)])
                 if latest and 'created_at' in latest:
-                    from datetime import datetime
-                    import dateutil.parser
-                    latest_time = dateutil.parser.parse(latest['created_at'])
+                    # FIXED: Handle datetime object properly
+                    created_at_value = latest['created_at']
+                    
+                    # Convert to datetime if it's a string
+                    if isinstance(created_at_value, str):
+                        try:
+                            from dateutil import parser
+                            latest_time = parser.parse(created_at_value)
+                        except:
+                            # If parsing fails, use current time minus 1 day
+                            latest_time = datetime.now() - timedelta(days=1)
+                    elif isinstance(created_at_value, datetime):
+                        # Already a datetime object
+                        latest_time = created_at_value
+                    else:
+                        # Unknown type, use fallback
+                        latest_time = datetime.now() - timedelta(days=1)
+                    
                     age_hours = (datetime.now() - latest_time).total_seconds() / 3600
                     
                     if age_hours < 4:
@@ -310,8 +325,14 @@ jobs:
             print('⚠️ No recent forecasts found! Running predictions...')
             import subprocess
             try:
-                subprocess.run(['python', 'model_training/runallmodels.py', '--predict-only'], check=True)
-                print('✅ Predictions generated successfully')
+                # First run features
+                subprocess.run(['python', 'data_pipeline/features.py'], check=True)
+                # Then run predictions
+                result = subprocess.run(['python', 'model_training/runallmodels.py'], check=True)
+                if result.returncode == 0:
+                    print('✅ Predictions generated successfully')
+                else:
+                    print('❌ Failed to generate predictions')
             except Exception as e:
                 print(f'❌ Failed to generate predictions: {e}')
         else:
