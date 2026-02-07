@@ -193,7 +193,7 @@ The system uses **GitHub Actions** for automated workflow:
 
 **Ajiya Anwar**  
 🎓 Data Science Undergraduate  
-📧 [LinkedIn Profile](https://www.linkedin.com/in/ajiya-anwar-1997a6266/)  
+📧 [LinkedIn Profile](https://www.linkedin.com/in/ajiya-anwar)  
 🐙 [GitHub Profile](https://github.com/AjiyaAnwar)
 
 
